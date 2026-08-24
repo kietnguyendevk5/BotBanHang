@@ -1,8 +1,8 @@
 import logging
-import sqlite3
 import asyncio
 import re
 import os
+import asyncpg
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BufferedInputFile
@@ -20,151 +20,114 @@ BANK_ACCOUNT = "0356442864"       # Số tài khoản
 ACCOUNT_NAME = "NGUYEN DIEN TUAN KIET" 
 
 WEBHOOK_HOST = '0.0.0.0'
-# Cấu hình API Key xác thực từ SePay (Lấy từ biến môi trường hoặc mặc định)
 SEPAY_API_KEY = os.getenv("SEPAY_API_KEY", "spsk_test_zFCU1AguPj8T7RqzMAMRxSbgaspYi99y")
+# Sửa lại thành tên biến môi trường
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:fVXjKs8XvC9lljvT@db.xfyfbpqyelrzfsgwhgbc.supabase.co:5432/postgres")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# Định nghĩa trạng thái FSM để nhận số lượng khách nhập
+# Biến toàn cục chứa kết nối pool database
+db_pool = None
+
+# Định nghĩa trạng thái FSM
 class BuyState(StatesGroup):
     waiting_for_quantity = State()
 
-# ==================== KHỞI TẠO DATABASE ĐỘNG ====================
-def init_db():
-    conn = sqlite3.connect('shop.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            balance INTEGER DEFAULT 0
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS categories (
-            cat_code TEXT PRIMARY KEY,
-            cat_name TEXT NOT NULL,
-            price INTEGER NOT NULL,
-            format_desc TEXT DEFAULT 'UID | Pass | 2FA'
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS stock (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cat_code TEXT NOT NULL,
-            account_info TEXT NOT NULL
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS transactions (
-            sepay_id INTEGER PRIMARY KEY,
-            user_id INTEGER,
-            amount INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
+# ==================== KHỞI TẠO DATABASE POSTGRESQL ====================
+async def init_db():
+    global db_pool
+    try:
+        db_pool = await asyncpg.create_pool(DATABASE_URL)
+        async with db_pool.acquire() as conn:
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    balance BIGINT DEFAULT 0
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS categories (
+                    cat_code TEXT PRIMARY KEY,
+                    cat_name TEXT NOT NULL,
+                    price BIGINT NOT NULL,
+                    format_desc TEXT DEFAULT 'UID | Pass | 2FA'
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS stock (
+                    id SERIAL PRIMARY KEY,
+                    cat_code TEXT NOT NULL,
+                    account_info TEXT NOT NULL
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS transactions (
+                    sepay_id BIGINT PRIMARY KEY,
+                    user_id BIGINT,
+                    amount BIGINT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+        logging.info("Kết nối và khởi tạo cơ sở dữ liệu PostgreSQL thành công!")
+    except Exception as e:
+        logging.error(f"Lỗi kết nối PostgreSQL: {e}")
+        raise e
 
-init_db()
+# --- CÁC HÀM XỬ LÝ DATABASE (ASYNC) ---
+async def get_user_balance(user_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow('SELECT balance FROM users WHERE user_id = $1', user_id)
+        if not row:
+            await conn.execute('INSERT INTO users (user_id, balance) VALUES ($1, 0)', user_id)
+            return 0
+        return row['balance']
 
-# --- CÁC HÀM XỬ LÝ DATABASE ---
-def get_user_balance(user_id):
-    conn = sqlite3.connect('shop.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
-    row = cursor.fetchone()
-    if not row:
-        cursor.execute('INSERT INTO users (user_id, balance) VALUES (?, 0)', (user_id,))
-        conn.commit()
-        balance = 0
-    else:
-        balance = row[0]
-    conn.close()
-    return balance
+async def update_balance(user_id, amount):
+    async with db_pool.acquire() as conn:
+        await conn.execute('UPDATE users SET balance = balance + $1 WHERE user_id = $2', amount, user_id)
 
-def update_balance(user_id, amount):
-    conn = sqlite3.connect('shop.db')
-    cursor = conn.cursor()
-    cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
-    conn.commit()
-    conn.close()
+async def get_all_categories():
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch('SELECT cat_code, cat_name, price, format_desc FROM categories')
+        return rows
 
-def get_all_categories():
-    conn = sqlite3.connect('shop.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT cat_code, cat_name, price, format_desc FROM categories')
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
+async def get_stock_count(cat_code):
+    async with db_pool.acquire() as conn:
+        count = await conn.fetchval('SELECT COUNT(*) FROM stock WHERE cat_code = $1', cat_code)
+        return count
 
-def get_stock_count(cat_code):
-    conn = sqlite3.connect('shop.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM stock WHERE cat_code = ?', (cat_code,))
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
-
-def buy_multiple_accounts_from_stock(cat_code, quantity):
-    conn = sqlite3.connect('shop.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, account_info FROM stock WHERE cat_code = ? LIMIT ?', (cat_code, quantity))
-    rows = cursor.fetchall()
-    
-    if not rows:
-        conn.close()
-        return []
-    
-    acc_ids = [row[0] for row in rows]
-    acc_infos = [row[1] for row in rows]
-    
-    placeholders = ','.join(['?'] * len(acc_ids))
-    cursor.execute(f'DELETE FROM stock WHERE id IN ({placeholders})', acc_ids)
-    conn.commit()
-    conn.close()
-    return acc_infos
+async def buy_multiple_accounts_from_stock(cat_code, quantity):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch('SELECT id, account_info FROM stock WHERE cat_code = $1 LIMIT $2', cat_code, quantity)
+        if not rows:
+            return []
+        
+        acc_ids = [row['id'] for row in rows]
+        acc_infos = [row['account_info'] for row in rows]
+        
+        # Xóa các tài khoản đã mua khỏi kho
+        await conn.execute('DELETE FROM stock WHERE id = ANY($1::int[])', acc_ids)
+        return acc_infos
 
 # ==================== HÀM PHÂN LOẠI DỰA TRÊN TÊN FILE ====================
 def get_category_info_by_filename(filename):
     fname = filename.upper()
-    
     if "TUT" in fname and "TRAU" in fname:
-        return (
-            "cat_tut_trau",
-            "CLONE CHƠI TUT TRÂU - AVT - NAME THÁI - HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%",
-            3500,
-            "UID | Pass | Hotmail | Pass Hotmail | Cookie | Token"
-        )
+        return ("cat_tut_trau", "CLONE CHƠI TUT TRÂU - AVT - NAME THÁI - HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%", 3500, "UID | Pass | Hotmail | Pass Hotmail | Cookie | Token")
     elif "FIX" in fname or "VIET" in fname:
-        return (
-            "cat_fix_viet",
-            "CLONE FIX UP CHUẨN NAME VIỆT - CHƠI TUT - VER HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%",
-            3500,
-            "UID | Pass | Hotmail | Pass Hotmail | Cookie"
-        )
+        return ("cat_fix_viet", "CLONE FIX UP CHUẨN NAME VIỆT - CHƠI TUT - VER HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%", 3500, "UID | Pass | Hotmail | Pass Hotmail | Cookie")
     elif "BM" in fname:
-        return (
-            "cat_bm",
-            "Clone New đã qua BM",
-            3000,
-            "Hàng login qua cookies, ae log id pass tets trước khi dùng"
-        )
+        return ("cat_bm", "Clone New đã qua BM", 3000, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     else:
-        return (
-            "cat_new_zin",
-            "CLONE CHƠI TUT - VER HOTMAIL - - LIVE ALL 100% - NEW ZIN",
-            3000,
-            "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU"
-        )
+        return ("cat_new_zin", "CLONE CHƠI TUT - VER HOTMAIL - - LIVE ALL 100% - NEW ZIN", 3000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
 
 # ==================== CÁC LỆNH CỦA BOT TELEGRAM ====================
-
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
-    get_user_balance(user_id)
+    await get_user_balance(user_id)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -186,7 +149,7 @@ async def cmd_start(message: types.Message):
 @dp.callback_query(lambda c: c.data == "profile")
 async def profile_callback(call: CallbackQuery):
     user_id = call.from_user.id
-    balance = get_user_balance(user_id)
+    balance = await get_user_balance(user_id)
     await call.message.answer(
         f"👤 **Thông tin tài khoản:**\n"
         f"- ID của bạn: `{user_id}`\n"
@@ -230,14 +193,15 @@ def urllib_quote(text):
 
 @dp.callback_query(lambda c: c.data == "buy_menu")
 async def buy_menu_callback(call: CallbackQuery):
-    categories = get_all_categories()
+    categories = await get_all_categories()
     keyboard_buttons = []
     
     if not categories:
         keyboard_buttons.append([InlineKeyboardButton(text="⚠️ Shop chưa cập nhật sản phẩm", callback_data="back_start")])
     else:
-        for cat_code, cat_name, price, format_desc in categories:
-            count = get_stock_count(cat_code)
+        for cat in categories:
+            cat_code, cat_name, price, format_desc = cat['cat_code'], cat['cat_name'], cat['price'], cat['format_desc']
+            count = await get_stock_count(cat_code)
             short_name = cat_name[:40] + "..." if len(cat_name) > 40 else cat_name
             btn_text = f"{short_name} ({price:,}đ) - Còn: {count}"
             keyboard_buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"buy_{cat_code}")])
@@ -270,19 +234,16 @@ async def back_start_callback(call: CallbackQuery):
 @dp.callback_query(lambda c: c.data.startswith("buy_"))
 async def process_buy_category(call: CallbackQuery, state: FSMContext):
     cat_code = call.data.replace("buy_", "")
-    stock_count = get_stock_count(cat_code)
+    stock_count = await get_stock_count(cat_code)
 
     if stock_count == 0:
         await call.answer("❌ Loại này tạm hết hàng, vui lòng chọn loại khác!", show_alert=True)
         return
 
-    conn = sqlite3.connect('shop.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT cat_name, price, format_desc FROM categories WHERE cat_code = ?', (cat_code,))
-    cat_info = cursor.fetchone()
-    conn.close()
+    async with db_pool.acquire() as conn:
+        cat_info = await conn.fetchrow('SELECT cat_name, price, format_desc FROM categories WHERE cat_code = $1', cat_code)
 
-    cat_name, price, format_desc = cat_info
+    cat_name, price, format_desc = cat_info['cat_name'], cat_info['price'], cat_info['format_desc']
 
     await state.update_data(cat_code=cat_code, cat_name=cat_name, price=price, stock_count=stock_count)
     await state.set_state(BuyState.waiting_for_quantity)
@@ -344,16 +305,16 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
         return
 
     total_price = price * quantity
-    balance = get_user_balance(user_id)
+    balance = await get_user_balance(user_id)
 
     if balance < total_price:
         await message_target.answer(f"❌ Số dư không đủ! Cần `{total_price:,} VNĐ` nhưng ví của bạn chỉ có `{balance:,} VNĐ`.", parse_mode="Markdown")
         await state.clear()
         return
 
-    update_balance(user_id, -total_price)
-    accounts = buy_multiple_accounts_from_stock(cat_code, quantity)
-    new_balance = get_user_balance(user_id)
+    await update_balance(user_id, -total_price)
+    accounts = await buy_multiple_accounts_from_stock(cat_code, quantity)
+    new_balance = await get_user_balance(user_id)
 
     file_content = "\n".join(accounts)
     file_bytes = file_content.encode('utf-8')
@@ -372,7 +333,7 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
     await message_target.answer_document(document=txt_file)
     await state.clear()
 
-# ==================== TÍNH NĂNG NHẬN FILE .TXT VÀ ĐỌC TÊN FILE ====================
+# ==================== NHẬN FILE .TXT (ADMIN) ====================
 @dp.message(lambda message: message.document is not None)
 async def handle_document_upload(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -396,24 +357,19 @@ async def handle_document_upload(message: types.Message):
     lines = file_content.split('\n')
     added_count = 0
 
-    conn = sqlite3.connect('shop.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT cat_code FROM categories WHERE cat_code = ?', (cat_code,))
-    if not cursor.fetchone():
-        cursor.execute(
-            'INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES (?, ?, ?, ?)', 
-            (cat_code, cat_name, price, format_desc)
-        )
+    async with db_pool.acquire() as conn:
+        exists = await conn.fetchval('SELECT cat_code FROM categories WHERE cat_code = $1', cat_code)
+        if not exists:
+            await conn.execute(
+                'INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES ($1, $2, $3, $4)', 
+                cat_code, cat_name, price, format_desc
+            )
 
-    for line in lines:
-        line = line.strip()
-        if line:
-            cursor.execute('INSERT INTO stock (cat_code, account_info) VALUES (?, ?)', (cat_code, line))
-            added_count += 1
-            
-    conn.commit()
-    conn.close()
+        for line in lines:
+            line = line.strip()
+            if line:
+                await conn.execute('INSERT INTO stock (cat_code, account_info) VALUES ($1, $2)', cat_code, line)
+                added_count += 1
 
     await message.reply(
         f"📥 **Đã nhập kho thành công!**\n"
@@ -433,8 +389,8 @@ async def cmd_add_money(message: types.Message):
         return
     try:
         target_user_id, amount = int(args[1]), int(args[2])
-        get_user_balance(target_user_id)
-        update_balance(target_user_id, amount)
+        await get_user_balance(target_user_id)
+        await update_balance(target_user_id, amount)
         await message.reply(f"✅ Đã cộng `{amount:,} VNĐ` cho user `{target_user_id}`!")
         await bot.send_message(target_user_id, f"🎉 Tài khoản vừa được cộng `{amount:,} VNĐ` từ Admin!")
     except ValueError:
@@ -475,48 +431,37 @@ async def sepay_webhook_handler(request):
         if not sepay_id:
             return web.json_response({"success": False, "error": "Missing transaction id"}, status=400)
 
-        conn = sqlite3.connect('shop.db')
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS transactions (
-                sepay_id INTEGER PRIMARY KEY,
-                user_id INTEGER,
-                amount INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        cursor.execute('SELECT sepay_id FROM transactions WHERE sepay_id = ?', (sepay_id,))
-        if cursor.fetchone():
-            conn.close()
-            return web.json_response({"success": True})
+        async with db_pool.acquire() as conn:
+            exists = await conn.fetchval('SELECT sepay_id FROM transactions WHERE sepay_id = $1', int(sepay_id))
+            if exists:
+                return web.json_response({"success": True})
 
-        # Cho phép tìm từ khóa NAP theo sau là khoảng trắng và chuỗi số user_id (dù phía trước có mã giao dịch)
-        match = re.search(r'NAP\D*(\d+)', str(content), re.IGNORECASE)
-        if match:
-            target_user_id = int(match.group(1))
-            get_user_balance(target_user_id)
-            update_balance(target_user_id, transfer_amount)
-
-            cursor.execute('INSERT INTO transactions (sepay_id, user_id, amount) VALUES (?, ?, ?)', (sepay_id, target_user_id, transfer_amount))
-            conn.commit()
-            conn.close()
-
-            try:
-                new_bal = get_user_balance(target_user_id)
-                await bot.send_message(
-                    target_user_id,
-                    f"🎉 **NẠP TIỀN THÀNH CÔNG!**\n\n"
-                    f"💵 Nhận: `+{transfer_amount:,} VNĐ`\n"
-                    f"💰 Số dư ví: `{new_bal:,} VNĐ`",
-                    parse_mode="Markdown"
-                )
-            except Exception as e:
-                logging.error(f"Lỗi gửi tin nhắn Telegram cho user {target_user_id}: {e}")
-        else:
-            conn.close()
-            logging.warning(f"Không tìm thấy cú pháp NAP trong nội dung: '{content}'")
+            match = re.search(r'NAP\D*(\d+)', str(content), re.IGNORECASE)
+            if match:
+                target_user_id = int(match.group(1))
+                
+                # Đảm bảo user tồn tại trước khi cộng tiền
+                user_check = await conn.fetchrow('SELECT balance FROM users WHERE user_id = $1', target_user_id)
+                if not user_check:
+                    await conn.execute('INSERT INTO users (user_id, balance) VALUES ($1, 0)', target_user_id)
+                
+                await conn.execute('UPDATE users SET balance = balance + $1 WHERE user_id = $2', transfer_amount, target_user_id)
+                await conn.execute('INSERT INTO transactions (sepay_id, user_id, amount) VALUES ($1, $2, $3)', int(sepay_id), target_user_id, transfer_amount)
+                
+                new_bal = await conn.fetchval('SELECT balance FROM users WHERE user_id = $1', target_user_id)
+                
+                try:
+                    await bot.send_message(
+                        target_user_id,
+                        f"🎉 **NẠP TIỀN THÀNH CÔNG!**\n\n"
+                        f"💵 Nhận: `+{transfer_amount:,} VNĐ`\n"
+                        f"💰 Số dư ví: `{new_bal:,} VNĐ`",
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    logging.error(f"Lỗi gửi tin nhắn Telegram cho user {target_user_id}: {e}")
+            else:
+                logging.warning(f"Không tìm thấy cú pháp NAP trong nội dung: '{content}'")
 
         return web.json_response({"success": True})
 
@@ -525,6 +470,9 @@ async def sepay_webhook_handler(request):
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 async def main():
+    # Khởi tạo DB trước khi chạy server và bot
+    await init_db()
+
     app = web.Application()
     app.router.add_post('/api/webhook/sepay', sepay_webhook_handler)
     
