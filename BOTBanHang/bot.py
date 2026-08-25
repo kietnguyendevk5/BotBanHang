@@ -121,7 +121,7 @@ def get_category_info_by_filename(filename):
     elif "BM" in fname:
         return ("cat_bm", "Clone New đã qua BM", 3000, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     else:
-        return ("cat_new_zin", "CLONE CHƠI TUT - VER HOTMAIL - - LIVE ALL 100% - NEW ZIN", 3000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
+        return ("cat_new_zin", "CLONE NGÂM - NAME RANDOM - VER HOTMAIL - - LIVE ALL 100% - NEW ZIN", 2500, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
 
 # ==================== CÁC LỆNH CỦA BOT TELEGRAM ====================
 @dp.message(Command("start"))
