@@ -115,9 +115,9 @@ async def buy_multiple_accounts_from_stock(cat_code, quantity):
 def get_category_info_by_filename(filename):
     fname = filename.upper()
     if "TUT" in fname and "TRAU" in fname:
-        return ("cat_tut_trau", "CLONE CHƠI TUT TRÂU - AVT - NAME THÁI - HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%", 3500, "UID | Pass | Hotmail | Pass Hotmail | Cookie | Token")
+        return ("cat_tut_trau", "CLONE NGÂM TRÂU - AVT - NAME THÁI - HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%", 3500, "UID | Pass | Hotmail | Pass Hotmail | Cookie | Token")
     elif "FIX" in fname or "VIET" in fname:
-        return ("cat_fix_viet", "CLONE FIX UP CHUẨN NAME VIỆT - CHƠI TUT - VER HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%", 3500, "UID | Pass | Hotmail | Pass Hotmail | Cookie")
+        return ("cat_fix_viet", "CLONE CHUẨN NAME VIỆT - CHƠI TUT - VER HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%", 3500, "UID | Pass | Hotmail | Pass Hotmail | Cookie")
     elif "BM" in fname:
         return ("cat_bm", "Clone New đã qua BM", 3000, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     else:
