@@ -176,7 +176,9 @@ async def deposit_callback(call: CallbackQuery):
                         f"- STK: `{BANK_ACCOUNT}`\n"
                         f"- Chủ tên: **{ACCOUNT_NAME}**\n"
                         f"- Nội dung chuyển khoản (Bắt buộc): `{syntax}`\n\n"
+                        f"⚠️ *MIN NẠP 2k.*\n"
                         f"⚠️ *Dùng app ngân hàng quét mã QR để nạp tự động sau vài giây.*"
+                       
                     )
                     await call.message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
                 else:
