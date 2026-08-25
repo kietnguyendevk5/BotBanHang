@@ -117,7 +117,7 @@ def get_category_info_by_filename(filename):
     if "TUT" in fname and "TRAU" in fname:
         return ("cat_tut_trau", "CLONE NGÂM TRÂU - AVT - NAME THÁI - HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%", 3500, "UID | Pass | Hotmail | Pass Hotmail | Cookie | Token")
     elif "FIX" in fname or "VIET" in fname:
-        return ("cat_fix_viet", "CLONE CHUẨN NAME VIỆT - CHƠI TUT - VER HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%", 3500, "UID | Pass | Hotmail | Pass Hotmail | Cookie")
+        return ("cat_fix_viet", "CLONE CHUẨN NAME VIỆT - VER HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%", 3500, "UID | Pass | Hotmail | Pass Hotmail | Cookie")
     elif "BM" in fname:
         return ("cat_bm", "Clone New đã qua BM", 3000, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     else:
