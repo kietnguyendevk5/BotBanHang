@@ -124,7 +124,7 @@ def get_category_info_by_filename(filename):
     elif "BM" in fname:
         return ("cat_bm", "Clone New đã qua BM", 2500, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     elif "TRUST" in fname or "2FA" in fname:
-        return ("cat_fb_2fa_trust", "Facebook 2fa - Hotmail Trust", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail") # Bạn có thể thay đổi giá (3000) và format cho phù hợp    
+        return ("cat_fb_2fa_trust", "CLONE NAME RANDOM - ON2FA, NO AVT ", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail") # Bạn có thể thay đổi giá (3000) và format cho phù hợp    
     else:
         return ("cat_new_zin", "CLONE - NAME RANDOM - VER HOTMAIL - - LIVE ALL 100% - NEW ZIN", 2000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
 
