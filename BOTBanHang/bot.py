@@ -70,7 +70,7 @@ async def init_db():
                     sepay_id BIGINT PRIMARY KEY,
                     user_id BIGINT,
                     amount BIGINT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh')
                 )
             ''')
         logging.info("Kết nối và khởi tạo cơ sở dữ liệu PostgreSQL thành công!")
