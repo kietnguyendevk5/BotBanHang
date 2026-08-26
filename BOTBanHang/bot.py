@@ -161,6 +161,8 @@ async def support_callback(call: CallbackQuery):
         f"🛡️ **Chính sách bảo hành:**\n"
         f"- Bảo hành **1 đổi 1** cho các tài khoản lỗi (Sai pass, die, checkpoint ngay lần đầu đăng nhập trong vòng 24h).\n"
         f"- Yêu cầu: Có video quay lại quá trình mua và check tài khoản.\n\n"
+        f"- Yêu cầu: Hoặc có ảnh có thời gian lúc mua và check tài khoản.\n"
+        f"- Làm đủ 1 trong 2 yêu cầu trên mới giải quyết\n\n"
         f"📞 **Liên hệ hỗ trợ trực tiếp:**\n"
         f"- Telegram: `{SUPPORT_TELEGRAM}`\n"
         f"- Zalo: `{SUPPORT_ZALO}`",
