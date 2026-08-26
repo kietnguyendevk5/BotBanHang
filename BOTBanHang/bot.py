@@ -19,6 +19,9 @@ BANK_ID = "MB"                    # Mã VietQR của MB Bank
 BANK_ACCOUNT = "0356442864"       # Số tài khoản
 ACCOUNT_NAME = "NGUYEN DIEN TUAN KIET" 
 
+SUPPORT_TELEGRAM = "@kietnguyen0999" # Thay bằng username Telegram của bạn
+SUPPORT_ZALO = "0356442864"         # Thay bằng số điện thoại Zalo của bạn
+
 WEBHOOK_HOST = '0.0.0.0'
 SEPAY_API_KEY = os.getenv("SEPAY_API_KEY", "spsk_test_zFCU1AguPj8T7RqzMAMRxSbgaspYi99y")
 # Sửa lại thành tên biến môi trường
@@ -135,17 +138,56 @@ async def cmd_start(message: types.Message):
             InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit")
         ],
         [
-            InlineKeyboardButton(text="👤 Tài Khoản Của Tôi", callback_data="profile")
+            InlineKeyboardButton(text="👤 Tài Khoản Của Tôi", callback_data="profile"),
+            InlineKeyboardButton(text="🛠️ Hỗ Trợ & Bảo Hành", callback_data="support")
         ]
     ])
     
     await message.answer(
         f"🤖 **HỆ THỐNG BÁN VIA/CLONE TỰ ĐỘNG**\n\n"
-        f"Chào mừng bạn đến với shop! Vui lòng chọn chức năng bên dưới:",
+        f"Chào mừng bạn đến với shop!\n"
+        f"🛡️ **Chính sách:** Bảo hành **1 đổi 1** nếu lỗi lần đầu đăng nhập.\n"
+        f"Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
+@dp.callback_query(lambda c: c.data == "support")
+async def support_callback(call: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Quay lại", callback_data="back_start")]
+    ])
+    await call.message.edit_text(
+        f"🛠️ **HƯỚNG DẪN HỖ TRỢ & BẢO HÀNH**\n\n"
+        f"🛡️ **Chính sách bảo hành:**\n"
+        f"- Bảo hành **1 đổi 1** cho các tài khoản lỗi (Sai pass, die, checkpoint ngay lần đầu đăng nhập trong vòng 24h).\n"
+        f"- Yêu cầu: Có video quay lại quá trình mua và check tài khoản.\n\n"
+        f"📞 **Liên hệ hỗ trợ trực tiếp:**\n"
+        f"- Telegram: `{SUPPORT_TELEGRAM}`\n"
+        f"- Zalo: `{SUPPORT_ZALO}`",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+    await call.answer()
 
+@dp.callback_query(lambda c: c.data == "back_start")
+async def back_start_callback(call: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📦 Mua Tài Khoản", callback_data="buy_menu"),
+            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit")
+        ],
+        [
+            InlineKeyboardButton(text="👤 Tài Khoản Của Tôi", callback_data="profile"),
+            InlineKeyboardButton(text="🛠️ Hỗ Trợ & Bảo Hành", callback_data="support")
+        ]
+    ])
+    await call.message.edit_text(
+        f"🤖 **HỆ THỐNG BÁN VIA/CLONE TỰ ĐỘNG**\n\n"
+        f"Chào mừng bạn trở lại! Vui lòng chọn chức năng bên dưới:",
+        reply_markup=keyboard, 
+        parse_mode="Markdown"
+    )
+    await call.answer()
 @dp.callback_query(lambda c: c.data == "profile")
 async def profile_callback(call: CallbackQuery):
     user_id = call.from_user.id
@@ -328,6 +370,8 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
         f"🔢 Số lượng: `{quantity}` con\n"
         f"💵 Tổng tiền: `{total_price:,} VNĐ`\n"
         f"💰 Số dư ví còn lại: `{new_balance:,} VNĐ`\n\n"
+        f"🛡️ *Bảo hành 1 đổi 1 lỗi lần đầu đăng nhập.*\n"
+        f"📞 *Hỗ trợ / Khiếu nại liên hệ Telegram:* `{SUPPORT_TELEGRAM}`\n\n"
         f"📄 *Danh sách tài khoản của bạn đã được đính kèm ở file bên dưới:*"
     )
     
