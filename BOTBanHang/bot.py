@@ -144,9 +144,13 @@ async def cmd_start(message: types.Message):
     ])
     
     await message.answer(
-        f"🤖 **HỆ THỐNG BÁN VIA/CLONE TỰ ĐỘNG**\n\n"
-        f"Chào mừng bạn đến với shop!\n"
-        f"🛡️ **Chính sách:** Bảo hành **1 đổi 1** nếu lỗi lần đầu đăng nhập.\n"
+        f"🤖 **HỆ THỐNG BÁN VIA/CLONE TỰ ĐỘNG 24/7**\n\n"
+        f"👋 Chào mừng bạn đến với shop!\n"
+        f"🚀 Chuyên cung cấp tài khoản chất lượng cao, chạy Tut mượt mà.\n\n"
+        f"🛡️ **Chính sách & Lưu ý:**\n"
+        f"• Bảo hành **1 đổi 1** nếu lỗi lần đầu đăng nhập.\n"
+        f"• **Bắt buộc:** Quay video từ lúc mua đến lúc login để được hỗ trợ.\n"
+        f"• Không bảo hành nếu tự ý đổi info hoặc lỗi do thiết bị/IP của khách.\n\n"
         f"Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard,
         parse_mode="Markdown"
