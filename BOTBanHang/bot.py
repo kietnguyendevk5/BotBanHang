@@ -13,18 +13,17 @@ import aiohttp
 
 # ==================== CẤU HÌNH NGÂN HÀNG & BOT ====================
 API_TOKEN = '8735568227:AAFq02ZhIJLfW5ojVg5q3xVYRNeq3AGK9CQ' 
-ADMIN_ID = 7718090377            
+ADMIN_ID = 7718090377         
 
 BANK_ID = "MB"                    # Mã VietQR của MB Bank
 BANK_ACCOUNT = "0356442864"       # Số tài khoản
 ACCOUNT_NAME = "NGUYEN DIEN TUAN KIET" 
 
 SUPPORT_TELEGRAM = "@kietnguyen0999" # Thay bằng username Telegram của bạn
-SUPPORT_ZALO = "0356442864"         # Thay bằng số điện thoại Zalo của bạn
+SUPPORT_ZALO = "0356442864"          # Thay bằng số điện thoại Zalo của bạn
 
 WEBHOOK_HOST = '0.0.0.0'
 SEPAY_API_KEY = os.getenv("SEPAY_API_KEY", "spsk_test_zFCU1AguPj8T7RqzMAMRxSbgaspYi99y")
-# Sửa lại thành tên biến môi trường
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:fVXjKs8XvC9lljvT@db.xfyfbpqyelrzfsgwhgbc.supabase.co:5432/postgres")
 
 logging.basicConfig(level=logging.INFO)
@@ -124,7 +123,7 @@ def get_category_info_by_filename(filename):
     elif "BM" in fname:
         return ("cat_bm", "Clone New đã qua BM", 2500, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     elif "TRUST" in fname or "2FA" in fname:
-        return ("cat_fb_2fa_trust", "CLONE NAME RANDOM - ON2FA, NO AVT ", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail") # Bạn có thể thay đổi giá (3000) và format cho phù hợp    
+        return ("cat_fb_2fa_trust", "CLONE NAME RANDOM - ON2FA, NO AVT ", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail")    
     else:
         return ("cat_new_zin", "CLONE - NAME RANDOM - VER HOTMAIL - - LIVE ALL 100% - NEW ZIN", 2000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
 
@@ -157,6 +156,7 @@ async def cmd_start(message: types.Message):
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
+
 @dp.callback_query(lambda c: c.data == "support")
 async def support_callback(call: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -202,6 +202,7 @@ async def back_start_callback(call: CallbackQuery):
         parse_mode="Markdown"
     )
     await call.answer()
+
 @dp.callback_query(lambda c: c.data == "profile")
 async def profile_callback(call: CallbackQuery):
     user_id = call.from_user.id
@@ -234,7 +235,6 @@ async def deposit_callback(call: CallbackQuery):
                         f"- Nội dung chuyển khoản (Bắt buộc): `{syntax}`\n\n"
                         f"⚠️ *Dùng app ngân hàng quét mã QR để nạp tự động sau vài giây.*\n"
                         f"⚠️ *MIN NẠP 2k.*"
-                       
                     )
                     await call.message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
                 else:
@@ -268,25 +268,6 @@ async def buy_menu_callback(call: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     
     await call.message.edit_text("📂 **Chọn loại tài khoản bạn muốn mua:**", reply_markup=keyboard, parse_mode="Markdown")
-    await call.answer()
-
-@dp.callback_query(lambda c: c.data == "back_start")
-async def back_start_callback(call: CallbackQuery):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📦 Mua Tài Khoản", callback_data="buy_menu"),
-            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit")
-        ],
-        [
-            InlineKeyboardButton(text="👤 Tài Khoản Của Tôi", callback_data="profile")
-        ]
-    ])
-    await call.message.edit_text(
-        f"🤖 **HỆ THỐNG BÁN VIA/CLONE TỰ ĐỘNG**\n\n"
-        f"Chào mừng bạn trở lại! Vui lòng chọn chức năng bên dưới:",
-        reply_markup=keyboard, 
-        parse_mode="Markdown"
-    )
     await call.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("buy_"))
@@ -340,7 +321,7 @@ async def process_quick_quantity(call: CallbackQuery, state: FSMContext):
 
 @dp.message(BuyState.waiting_for_quantity)
 async def process_typed_quantity(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
+    if not message.text or not message.text.isdigit():
         await message.reply("⚠️ Vui lòng nhập một con số hợp lệ (ví dụ: `5`, `10`)!", parse_mode="Markdown")
         return
     
@@ -395,9 +376,12 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
 
 # ==================== NHẬN FILE .TXT (ADMIN) ====================
 @dp.message(lambda message: message.document is not None)
-async def handle_document_upload(message: types.Message):
+async def handle_document_upload(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
+
+    # Xóa sạch trạng thái FSM hiện tại tránh bị kẹt ở bước mua hàng
+    await state.clear()
 
     document = message.document
     file_name = document.file_name
@@ -500,7 +484,6 @@ async def sepay_webhook_handler(request):
             if match:
                 target_user_id = int(match.group(1))
                 
-                # Đảm bảo user tồn tại trước khi cộng tiền
                 user_check = await conn.fetchrow('SELECT balance FROM users WHERE user_id = $1', target_user_id)
                 if not user_check:
                     await conn.execute('INSERT INTO users (user_id, balance) VALUES ($1, 0)', target_user_id)
@@ -530,7 +513,6 @@ async def sepay_webhook_handler(request):
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 async def main():
-    # Khởi tạo DB trước khi chạy server và bot
     await init_db()
 
     app = web.Application()
