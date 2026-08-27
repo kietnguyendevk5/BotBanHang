@@ -513,7 +513,39 @@ async def sepay_webhook_handler(request):
     except Exception as e:
         logging.error(f"LỖI NGHIÊM TRỌNG TRONG WEBHOOK SEPAY: {str(e)}", exc_info=True)
         return web.json_response({"success": False, "error": str(e)}, status=500)
-
+async def scheduled_notification_task():
+    """Hàm chạy ngầm thông báo cho người dùng cứ mỗi 10 tiếng"""
+    interval = 10 * 3600  # 10 tiếng (tính bằng giây)
+    # Đợi 1 chút cho bot khởi động xong hẳn rồi mới chạy vòng lặp đầu tiên (ví dụ 10 giây)
+    await asyncio.sleep(10)
+    
+    while True:
+        try:
+            # Lấy danh sách tất cả user_id từ database để gửi thông báo
+            if db_pool:
+                async with db_pool.acquire() as conn:
+                    rows = await conn.fetch('SELECT user_id FROM users')
+                    
+                    for row in rows:
+                        user_id = row['user_id']
+                        try:
+                            await bot.send_message(
+                                user_id,
+                                "🔔 **Thông báo định kỳ:**\n"
+                                "Shop vẫn hoạt động 24/7.AE cần mua clone giá chỉ từ 2k-3k ae vào tham khảo ủng hộ mình nhé",
+                                parse_mode="Markdown"
+                            )
+                            # Tránh gửi quá nhanh gây lỗi Floodwait của Telegram nếu có nhiều user
+                            await asyncio.sleep(0.5) 
+                        except Exception as e:
+                            logging.error(f"Không thể gửi tin nhắn cho user {user_id}: {e}")
+                            
+            logging.info("Đã gửi thông báo định kỳ 10 tiếng cho người dùng.")
+        except Exception as e:
+            logging.error(f"Lỗi trong task thông báo định kỳ: {e}")
+            
+        # Ngủ 10 tiếng trước lần chạy tiếp theo
+        await asyncio.sleep(interval)
 async def keep_alive_task():
     """Hàm tự động ping giữ sống Render tránh sleep"""
     interval = 3 * 60  # 3 phút
@@ -551,7 +583,8 @@ async def main():
 
     # Chạy background task keep-alive chạy ngầm song song
     asyncio.create_task(keep_alive_task())
-
+    # 🚀 Chạy ngầm task thông báo định kỳ 10 tiếng / lần
+    asyncio.create_task(scheduled_notification_task())
     print("🤖 Bot Telegram đang khởi động...")
     await dp.start_polling(bot)
 
