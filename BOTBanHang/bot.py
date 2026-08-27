@@ -219,7 +219,7 @@ async def profile_callback(call: CallbackQuery):
 async def deposit_callback(call: CallbackQuery):
     user_id = call.from_user.id
     syntax = f"NAP {user_id}"
-    qr_url = f"https://vietqr.app/img?bank=MBBank&acc=0356442864&template=compact&showinfo=true&holder=NGUYEN%20DIEN%20TUAN%20KIET"
+    qr_url = f"https://img.vietqr.io/image/{BANK_ID}-{BANK_ACCOUNT}-compact2.png?addInfo={syntax}&accountName={urllib_quote(ACCOUNT_NAME)}"
     
     try:
         async with aiohttp.ClientSession() as session:
