@@ -2,6 +2,8 @@ import logging
 import asyncio
 import re
 import os
+import time
+import requests
 import asyncpg
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -25,6 +27,7 @@ SUPPORT_ZALO = "0356442864"          # Thay bằng số điện thoại Zalo c�
 WEBHOOK_HOST = '0.0.0.0'
 SEPAY_API_KEY = os.getenv("SEPAY_API_KEY", "spsk_test_zFCU1AguPj8T7RqzMAMRxSbgaspYi99y")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:fVXjKs8XvC9lljvT@db.xfyfbpqyelrzfsgwhgbc.supabase.co:5432/postgres")
+SELF_URL = "https://botbanhang-s6iq.onrender.com/" # Link bot của bạn trên Render
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
@@ -380,7 +383,6 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
 
-    # Xóa sạch trạng thái FSM hiện tại tránh bị kẹt ở bước mua hàng
     await state.clear()
 
     document = message.document
@@ -512,11 +514,32 @@ async def sepay_webhook_handler(request):
         logging.error(f"LỖI NGHIÊM TRỌNG TRONG WEBHOOK SEPAY: {str(e)}", exc_info=True)
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
+async def keep_alive_task():
+    """Hàm tự động ping giữ sống Render tránh sleep"""
+    interval = 3 * 60  # 3 phút
+    print(f"--- Bắt đầu script giữ sống cho: {SELF_URL} ---")
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            # Dùng aiohttp để không block event loop của asyncio
+            async with aiohttp.ClientSession() as session:
+                async with session.get(SELF_URL, timeout=10) as response:
+                    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                    if response.status == 200:
+                        logging.info(f"[{current_time}] Ping giữ sống thành công! Mã phản hồi: {response.status}")
+                    else:
+                        logging.warning(f"[{current_time}] Server phản hồi mã lạ khi ping: {response.status}")
+        except Exception as e:
+            current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+            logging.error(f"[{current_time}] Lỗi khi ping giữ sống: {e}")
+
 async def main():
     await init_db()
 
     app = web.Application()
     app.router.add_post('/api/webhook/sepay', sepay_webhook_handler)
+    # Thêm route root đơn giản để nhận request ping (tránh lỗi 404 khi ping)
+    app.router.add_get('/', lambda request: web.Response(text="Bot is running!"))
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -525,6 +548,9 @@ async def main():
     site = web.TCPSite(runner, WEBHOOK_HOST, port)
     await site.start()
     print(f"🌐 Webhook Server đang chạy tại cổng {port}...")
+
+    # Chạy background task keep-alive chạy ngầm song song
+    asyncio.create_task(keep_alive_task())
 
     print("🤖 Bot Telegram đang khởi động...")
     await dp.start_polling(bot)
