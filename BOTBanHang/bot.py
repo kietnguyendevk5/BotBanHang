@@ -16,14 +16,11 @@ import aiohttp
 # ==================== CẤU HÌNH NGÂN HÀNG & BOT ====================
 API_TOKEN = '8735568227:AAFq02ZhIJLfW5ojVg5q3xVYRNeq3AGK9CQ' 
 ADMIN_ID = 7718090377         
-
 BANK_ID = "MB"                    # Mã VietQR của MB Bank
 BANK_ACCOUNT = "0356442864"       # Số tài khoản
 ACCOUNT_NAME = "NGUYEN DIEN TUAN KIET" 
-
 SUPPORT_TELEGRAM = "@kietnguyen0999" # Thay bằng username Telegram của bạn
 SUPPORT_ZALO = "0356442864"          # Thay bằng số điện thoại Zalo của bạn
-
 WEBHOOK_HOST = '0.0.0.0'
 SEPAY_API_KEY = os.getenv("SEPAY_API_KEY", "spsk_test_zFCU1AguPj8T7RqzMAMRxSbgaspYi99y")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:fVXjKs8XvC9lljvT@db.xfyfbpqyelrzfsgwhgbc.supabase.co:5432/postgres")
