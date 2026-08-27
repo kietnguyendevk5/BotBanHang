@@ -536,7 +536,7 @@ async def scheduled_notification_task():
                                 parse_mode="Markdown"
                             )
                             # Tránh gửi quá nhanh gây lỗi Floodwait của Telegram nếu có nhiều user
-                            await asyncio.sleep(0.5) 
+                            await asyncio.sleep(10) 
                         except Exception as e:
                             logging.error(f"Không thể gửi tin nhắn cho user {user_id}: {e}")
                             
