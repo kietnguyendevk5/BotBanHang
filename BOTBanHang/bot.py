@@ -5,6 +5,8 @@ import os
 import time
 import requests
 import asyncpg
+import random
+import string
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BufferedInputFile
@@ -14,7 +16,7 @@ from aiohttp import web
 import aiohttp
 
 # ==================== CẤU HÌNH NGÂN HÀNG & BOT ====================
-API_TOKEN = '8735568227:AAFq02ZhIJLfW5ojVg5q3xVYRNeq3AGK9CQ' 
+API_TOKEN = '8742518120:AAHdw7Do6jn7U7tLZg4eDbcbTXTtNTKI-v8' 
 ADMIN_ID = 7718090377         
 BANK_ID = "MB"                    # Mã VietQR của MB Bank
 BANK_ACCOUNT = "0356442864"       # Số tài khoản
@@ -72,6 +74,16 @@ async def init_db():
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh')
                 )
             ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS keys (
+                    key_code TEXT PRIMARY KEY,
+                    duration_days INT NOT NULL,
+                    is_used BOOLEAN DEFAULT FALSE,
+                    used_by BIGINT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh'),
+                    expired_at TIMESTAMP WITH TIME ZONE
+                )
+            ''')
         logging.info("Kết nối và khởi tạo cơ sở dữ liệu PostgreSQL thành công!")
     except Exception as e:
         logging.error(f"Lỗi kết nối PostgreSQL: {e}")
@@ -109,9 +121,15 @@ async def buy_multiple_accounts_from_stock(cat_code, quantity):
         acc_ids = [row['id'] for row in rows]
         acc_infos = [row['account_info'] for row in rows]
         
-        # Xóa các tài khoản đã mua khỏi kho
         await conn.execute('DELETE FROM stock WHERE id = ANY($1::int[])', acc_ids)
         return acc_infos
+
+def generate_key_string():
+    chars = string.ascii_uppercase + string.digits
+    part1 = ''.join(random.choices(chars, k=4))
+    part2 = ''.join(random.choices(chars, k=4))
+    part3 = ''.join(random.choices(chars, k=4))
+    return f"TTC-{part1}-{part2}-{part3}"
 
 # ==================== HÀM PHÂN LOẠI DỰA TRÊN TÊN FILE ====================
 def get_category_info_by_filename(filename):
@@ -123,9 +141,7 @@ def get_category_info_by_filename(filename):
     elif "BM" in fname:
         return ("cat_bm", "Clone New đã qua BM", 2500, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     elif "TRUST" in fname or "2FA" in fname:
-        return ("cat_fb_2fa_trust", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA, NO AVT ", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail") 
-    elif "VIA" in fname or "CO" in fname:
-        return ("cat_via_co", "CLONE ĐẦU 1000x - NAME NGOẠI - ON2FA - AVT - ZIN ALL ", 150000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail|MKP")    
+        return ("cat_fb_2fa_trust", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA, NO AVT ", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail")    
     else:
         return ("cat_new_zin", "CLONE NGÂM TRÂU - NAME RANDOM - VER HOTMAIL - LIVE ALL 100%", 2000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
 
@@ -138,22 +154,25 @@ async def cmd_start(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📦 Mua Tài Khoản", callback_data="buy_menu"),
-            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit")
+            InlineKeyboardButton(text="🔑 Mua Key Tool", callback_data="buy_key_menu")
         ],
         [
-            InlineKeyboardButton(text="👤 Tài Khoản Của Tôi", callback_data="profile"),
+            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit"),
+            InlineKeyboardButton(text="👤 Tài Khoản", callback_data="profile")
+        ],
+        [
             InlineKeyboardButton(text="🛠️ Hỗ Trợ & Bảo Hành", callback_data="support")
         ]
     ])
     
     await message.answer(
-        f"🤖 **HỆ THỐNG BÁN VIA/CLONE TỰ ĐỘNG 24/7**\n\n"
+        f"🤖 **HỆ THỐNG BÁN VIA/CLONE & KEY TOOL TỰ ĐỘNG 24/7**\n\n"
         f"👋 Chào mừng bạn đến với shop!\n"
-        f"🚀 Chuyên cung cấp tài khoản chất lượng cao, chạy Tut mượt mà.\n\n"
+        f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
         f"🛡️ **Chính sách & Lưu ý:**\n"
         f"• Bảo hành **1 đổi 1** nếu lỗi lần đầu đăng nhập.\n"
-        f"• **Bắt buộc:** Quay video từ lúc mua đến lúc login để được hỗ trợ.\n"
-        f"• Không bảo hành nếu tự ý đổi info hoặc lỗi do thiết bị/IP của khách.\n\n"
+        f" Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng @ToolTtc_bot.\n"
+        f"• **Bắt buộc:** Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
         f"Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard,
         parse_mode="Markdown"
@@ -168,9 +187,7 @@ async def support_callback(call: CallbackQuery):
         f"🛠️ **HƯỚNG DẪN HỖ TRỢ & BẢO HÀNH**\n\n"
         f"🛡️ **Chính sách bảo hành:**\n"
         f"- Bảo hành **1 đổi 1** cho các tài khoản lỗi (Sai pass, die, checkpoint ngay lần đầu đăng nhập trong vòng 24h).\n"
-        f"- Yêu cầu: Có video quay lại quá trình mua và check tài khoản.\n"
-        f"- Yêu cầu: Hoặc có ảnh có thời gian lúc mua và check tài khoản.\n"
-        f"- Làm đủ 1 trong 2 yêu cầu trên mới giải quyết\n\n"
+        f"- Yêu cầu: Có video quay lại quá trình mua và check tài khoản hoặc có ảnh thời gian lúc mua.\n\n"
         f"📞 **Liên hệ hỗ trợ trực tiếp:**\n"
         f"- Telegram: `{SUPPORT_TELEGRAM}`\n"
         f"- Zalo: `{SUPPORT_ZALO}`",
@@ -184,21 +201,23 @@ async def back_start_callback(call: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📦 Mua Tài Khoản", callback_data="buy_menu"),
-            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit")
+            InlineKeyboardButton(text="🔑 Mua Key Tool", callback_data="buy_key_menu")
         ],
         [
-            InlineKeyboardButton(text="👤 Tài Khoản Của Tôi", callback_data="profile"),
+            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit"),
+            InlineKeyboardButton(text="👤 Tài Khoản", callback_data="profile")
+        ],
+        [
             InlineKeyboardButton(text="🛠️ Hỗ Trợ & Bảo Hành", callback_data="support")
         ]
     ])
     await call.message.edit_text(
-        f"🤖 **HỆ THỐNG BÁN VIA/CLONE TỰ ĐỘNG 24/7**\n\n"
+        f"🤖 **HỆ THỐNG BÁN VIA/CLONE & KEY TOOL TỰ ĐỘNG 24/7**\n\n"
         f"👋 Chào mừng bạn đến với shop!\n"
-        f"🚀 Chuyên cung cấp tài khoản chất lượng cao, chạy Tut mượt mà.\n\n"
+        f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
         f"🛡️ **Chính sách & Lưu ý:**\n"
         f"• Bảo hành **1 đổi 1** nếu lỗi lần đầu đăng nhập.\n"
-        f"• **Bắt buộc:** Quay video từ lúc mua đến lúc login để được hỗ trợ.\n"
-        f"• Không bảo hành nếu tự ý đổi info hoặc lỗi do thiết bị/IP của khách.\n\n"
+        f"• **Bắt buộc:** Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
         f"Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard,
         parse_mode="Markdown"
@@ -251,12 +270,64 @@ def urllib_quote(text):
     import urllib.parse
     return urllib.parse.quote(text)
 
+# ==================== TÍNH NĂNG MUA KEY TOOL ====================
+@dp.callback_query(lambda c: c.data == "buy_key_menu")
+async def buy_key_menu_callback(call: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 Mua gói 1 Ngày (1,000đ)", callback_data="buykey_1")],
+        [InlineKeyboardButton(text="🔑 Mua gói 7 Ngày (7,000đ)", callback_data="buykey_7")],
+        [InlineKeyboardButton(text="🔑 Mua gói 30 Ngày (30,000đ)", callback_data="buykey_30")],
+        [InlineKeyboardButton(text="⬅️ Quay lại", callback_data="back_start")]
+    ])
+    await call.message.edit_text(
+        "🔑 **HỆ THỐNG MUA KEY TOOL TTC TỰ ĐỘNG**\n\n"
+        "• Tỷ giá: `1,000 VNĐ = 1 Ngày sử dụng`\n"
+        "• Chọn gói thời gian bạn muốn mua bên dưới:",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("buykey_"))
+async def process_buy_key(call: CallbackQuery):
+    days = int(call.data.replace("buykey_", ""))
+    price = days * 1000  # 1k 1 ngày 1 key
+    user_id = call.from_user.id
+
+    balance = await get_user_balance(user_id)
+    if balance < price:
+        await call.answer(f"❌ Số dư không đủ! Bạn cần {price:,}đ nhưng ví chỉ có {balance:,}đ.", show_alert=True)
+        return
+
+    new_key = generate_key_string()
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute('UPDATE users SET balance = balance - $1 WHERE user_id = $2', price, user_id)
+            await conn.execute(
+                'INSERT INTO keys (key_code, duration_days, is_used) VALUES ($1, $2, FALSE)',
+                new_key, days
+            )
+
+    new_balance = await get_user_balance(user_id)
+    await call.message.edit_text(
+        f"✅ **Mua key thành công!**\n\n"
+        f"🔑 Key của bạn: `{new_key}`\n"
+        f"⏳ Thời hạn: `{days} ngày`\n"
+        f"💵 Đã trừ: `{price:,} VNĐ`\n"
+        f"💰 Số dư còn lại: `{new_balance:,} VNĐ`\n\n"
+        f"👉 *Mang key này vào tool `ttc_bot.py` để kích hoạt sử dụng!*",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Quay lại", callback_data="back_start")]
+        ]),
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
 @dp.callback_query(lambda c: c.data == "buy_menu")
 async def buy_menu_callback(call: CallbackQuery):
     categories = await get_all_categories()
     keyboard_buttons = []
     
-    # Chuẩn bị phần liệt kê chi tiết tên danh mục để chống bị che khuất chữ trên nút
     details_text = "📂 **Chọn loại tài khoản bạn muốn mua:**\n\n"
     
     if not categories:
@@ -267,7 +338,6 @@ async def buy_menu_callback(call: CallbackQuery):
             cat_code, cat_name, price, format_desc = cat['cat_code'], cat['cat_name'], cat['price'], cat['format_desc']
             count = await get_stock_count(cat_code)
             
-            # Liệt kê thông tin đầy đủ vào nội dung tin nhắn phía trên
             details_text += f"🔹 **{idx}.** `{cat_name}`\n   💰 Giá: `{price:,}đ` | 📦 Còn: `{count}`\n\n"
             
             short_name = cat_name[:35] + "..." if len(cat_name) > 35 else cat_name
@@ -385,7 +455,6 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
     await message_target.answer_document(document=txt_file)
     await state.clear()
 
-# ==================== NHẬN FILE .TXT (ADMIN) ====================
 @dp.message(lambda message: message.document is not None)
 async def handle_document_upload(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -523,8 +592,7 @@ async def sepay_webhook_handler(request):
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 async def scheduled_notification_task():
-    """Hàm chạy ngầm thông báo cho người dùng cứ mỗi 10 tiếng"""
-    interval = 10 * 3600  # 10 tiếng (tính bằng giây)
+    interval = 10 * 3600  
     await asyncio.sleep(10)
     
     while True:
@@ -539,7 +607,7 @@ async def scheduled_notification_task():
                             await bot.send_message(
                                 user_id,
                                 "🔔 **Thông báo định kỳ:**\n"
-                                "Shop vẫn hoạt động 24/7. AE cần mua clone giá chỉ từ 2k-3k ae vào tham khảo ủng hộ mình nhé",
+                                "Shop vẫn hoạt động 24/7. AE cần mua clone hoặc key tool giá rẻ cứ ghé shop ủng hộ mình nhé!",
                                 parse_mode="Markdown"
                             )
                             await asyncio.sleep(10) 
@@ -553,8 +621,7 @@ async def scheduled_notification_task():
         await asyncio.sleep(interval)
 
 async def keep_alive_task():
-    """Hàm tự động ping giữ sống Render tránh sleep"""
-    interval = 3 * 60  # 3 phút
+    interval = 3 * 60  
     print(f"--- Bắt đầu script giữ sống cho: {SELF_URL} ---")
     while True:
         await asyncio.sleep(interval)
@@ -592,3 +659,4 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+    await dp.start_polling(bot)
