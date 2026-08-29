@@ -16,7 +16,7 @@ from aiohttp import web
 import aiohttp
 
 # ==================== CẤU HÌNH NGÂN HÀNG & BOT ====================
-API_TOKEN = '8742518120:AAHdw7Do6jn7U7tLZg4eDbcbTXTtNTKI-v8' 
+API_TOKEN = '8735568227:AAFq02ZhIJLfW5ojVg5q3xVYRNeq3AGK9CQ' 
 ADMIN_ID = 7718090377         
 BANK_ID = "MB"                    # Mã VietQR của MB Bank
 BANK_ACCOUNT = "0356442864"       # Số tài khoản
