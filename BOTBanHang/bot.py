@@ -166,16 +166,17 @@ async def cmd_start(message: types.Message):
     ])
     
     await message.answer(
-        f"🤖 <b>HỆ THỐNG BÁN VIA/CLONE & KEY TOOL TỰ ĐỘNG 24/7</b>\n\n"
+        f"🤖 **HỆ THỐNG BÁN VIA/CLONE & KEY TOOL TỰ ĐỘNG 24/7**\n\n"
         f"👋 Chào mừng bạn đến với shop!\n"
         f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
-        f"🛡️ <b>Chính sách & Lưu ý:</b>\n"
-        f"• Bảo hành <b>1 đổi 1</b> nếu lỗi lần đầu đăng nhập.\n"
+        f"🛡️ **Chính sách & Lưu ý:**\n"
+        f"• Bảo hành **1 đổi 1** nếu lỗi lần đầu đăng nhập.\n"
         f"• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng @ToolTtc_bot.\n"
-        f"• <b>Bắt buộc:</b> Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
+        f"• **Bắt buộc:** Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
         f"Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard,
-        parse_mode="HTML"
+        parse_mode="Markdown"
+        
     )
 
 @dp.callback_query(lambda c: c.data == "support")
