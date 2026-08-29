@@ -16,18 +16,18 @@ from aiohttp import web
 import aiohttp
 
 # ==================== CẤU HÌNH NGÂN HÀNG & BOT ====================
-BOT_TELE = "@ToolTtc_bot"
-API_TOKEN = '8735568227:AAFq02ZhIJLfW5ojVg5q3xVYRNeq3AGK9CQ' 
+API_TOKEN = '8742518120:AAHdw7Do6jn7U7tLZg4eDbcbTXTtNTKI-v8' 
 ADMIN_ID = 7718090377         
 BANK_ID = "MB"                    # Mã VietQR của MB Bank
 BANK_ACCOUNT = "0356442864"       # Số tài khoản
 ACCOUNT_NAME = "NGUYEN DIEN TUAN KIET" 
 SUPPORT_TELEGRAM = "@kietnguyen0999" # Thay bằng username Telegram của bạn
-SUPPORT_ZALO = "0356442864"          # Thay bằng số điện thoại Zalo của bạn
+SUPPORT_ZALO = "0356442864"         # Thay bằng số điện thoại Zalo của bạn
 WEBHOOK_HOST = '0.0.0.0'
 SEPAY_API_KEY = os.getenv("SEPAY_API_KEY", "spsk_test_zFCU1AguPj8T7RqzMAMRxSbgaspYi99y")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:fVXjKs8XvC9lljvT@db.xfyfbpqyelrzfsgwhgbc.supabase.co:5432/postgres")
 SELF_URL = "https://botbanhang-s6iq.onrender.com/" # Link bot của bạn trên Render
+BOT_TELE = "@ToolTtc_bot"
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
@@ -44,7 +44,8 @@ class BuyState(StatesGroup):
 async def init_db():
     global db_pool
     try:
-        db_pool = await asyncpg.create_pool(DATABASE_URL)
+        # Thêm statement_cache_size=0 để tránh lỗi DuplicatePreparedStatementError với PgBouncer
+        db_pool = await asyncpg.create_pool(DATABASE_URL, statement_cache_size=0)
         async with db_pool.acquire() as conn:
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
@@ -212,15 +213,15 @@ async def back_start_callback(call: CallbackQuery):
         ]
     ])
     await call.message.edit_text(
-        f"🤖 **HỆ THỐNG BÁN VIA/CLONE & KEY TOOL TỰ ĐỘNG 24/7**\n\n"
+        f"🤖 HỆ THỐNG BÁN VIA/CLONE & KEY TOOL TỰ ĐỘNG 24/7\n\n"
         f"👋 Chào mừng bạn đến với shop!\n"
         f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
-        f"🛡️ **Chính sách & Lưu ý:**\n"
-        f"• Bảo hành **1 đổi 1** nếu lỗi lần đầu đăng nhập.\n"
-        f"• **Bắt buộc:** Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
+        f"🛡️ Chính sách & Lưu ý:\n"
+        f"• Bảo hành 1 đổi 1 nếu lỗi lần đầu đăng nhập.\n"
+        f"• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
+        f"• Bắt buộc: Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
         f"Vui lòng chọn chức năng bên dưới:",
-        reply_markup=keyboard,
-        parse_mode="Markdown"
+        reply_markup=keyboard
     )
     await call.answer()
 
@@ -280,9 +281,10 @@ async def buy_key_menu_callback(call: CallbackQuery):
         [InlineKeyboardButton(text="⬅️ Quay lại", callback_data="back_start")]
     ])
     await call.message.edit_text(
-        "🔑 **HỆ THỐNG MUA KEY TOOL TTC TỰ ĐỘNG**\n\n"
-        "• Tỷ giá: `1,000 VNĐ = 1 Ngày sử dụng`\n"
-        "• Chọn gói thời gian bạn muốn mua bên dưới:",
+        f"🔑 **HỆ THỐNG MUA KEY TOOL TTC TỰ ĐỘNG**\n\n"
+        f"• Tỷ giá: `1,000 VNĐ = 1 Ngày sử dụng`\n"
+        f"• Lưu ý: Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
+        f"• Chọn gói thời gian bạn muốn mua bên dưới:",
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
@@ -315,7 +317,7 @@ async def process_buy_key(call: CallbackQuery):
         f"⏳ Thời hạn: `{days} ngày`\n"
         f"💵 Đã trừ: `{price:,} VNĐ`\n"
         f"💰 Số dư còn lại: `{new_balance:,} VNĐ`\n\n"
-        f"👉 *Mang key này vào tool `ttc_bot.py` để kích hoạt sử dụng!*",
+        f"👉 *Mang key này vào bot {BOT_TELE} để kích hoạt sử dụng!*",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⬅️ Quay lại", callback_data="back_start")]
         ]),
