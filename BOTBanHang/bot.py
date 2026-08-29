@@ -155,26 +155,27 @@ async def cmd_start(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📦 Mua Tài Khoản", callback_data="buy_menu"),
-            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit")
+            InlineKeyboardButton(text="🔑 Mua Key Tool", callback_data="buy_key_menu")
         ],
         [
-            InlineKeyboardButton(text="👤 Tài Khoản Của Tôi", callback_data="profile"),
+            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit"),
+            InlineKeyboardButton(text="👤 Tài Khoản", callback_data="profile")
+        ],
+        [
             InlineKeyboardButton(text="🛠️ Hỗ Trợ & Bảo Hành", callback_data="support")
         ]
     ])
     
     await message.answer(
-        f"🤖 **HỆ THỐNG BÁN VIA/CLONE TỰ ĐỘNG 24/7**\n\n"
+        f"🤖 HỆ THỐNG BÁN VIA/CLONE & KEY TOOL TỰ ĐỘNG 24/7\n\n"
         f"👋 Chào mừng bạn đến với shop!\n"
-        f"🚀 Chuyên cung cấp tài khoản chất lượng cao, chạy Tut mượt mà.\n\n"
-        f"🛡️ **Chính sách & Lưu ý:**\n"
-        f"• Bảo hành **1 đổi 1** nếu lỗi lần đầu đăng nhập.\n"
-        f"• **Bắt buộc:** Quay video từ lúc mua đến lúc login để được hỗ trợ.\n"
-        f"- Bot Tool: `{BOT_TELE}`\n"
-        f"• Không bảo hành nếu tự ý đổi info hoặc lỗi do thiết bị/IP của khách.\n\n"
+        f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
+        f"🛡️ Chính sách & Lưu ý:\n"
+        f"• Bảo hành 1 đổi 1 nếu lỗi lần đầu đăng nhập.\n"
+        f"• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
+        f"• Bắt buộc: Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
         f"Vui lòng chọn chức năng bên dưới:",
-        reply_markup=keyboard,
-        parse_mode="Markdown"
+        reply_markup=keyboard
     )
 
 @dp.callback_query(lambda c: c.data == "support")
