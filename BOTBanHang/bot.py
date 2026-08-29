@@ -171,7 +171,7 @@ async def cmd_start(message: types.Message):
         f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
         f"🛡️ **Chính sách & Lưu ý:**\n"
         f"• Bảo hành **1 đổi 1** nếu lỗi lần đầu đăng nhập.\n"
-        f" Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng @ToolTtc_bot.\n"
+        f"• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng @ToolTtc_bot.\n"
         f"• **Bắt buộc:** Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
         f"Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard,
