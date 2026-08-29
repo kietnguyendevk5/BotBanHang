@@ -16,6 +16,7 @@ from aiohttp import web
 import aiohttp
 
 # ==================== CẤU HÌNH NGÂN HÀNG & BOT ====================
+BOT_TELE ="@ToolTtc_bot"
 API_TOKEN = '8735568227:AAFq02ZhIJLfW5ojVg5q3xVYRNeq3AGK9CQ' 
 ADMIN_ID = 7718090377         
 BANK_ID = "MB"                    # Mã VietQR của MB Bank
@@ -171,7 +172,7 @@ async def cmd_start(message: types.Message):
         "🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
         "🛡️ Chính sách & Lưu ý:\n"
         "• Bảo hành 1 đổi 1 nếu lỗi lần đầu đăng nhập.\n"
-        "• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng @ToolTtc_bot.\n"
+        "• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
         "• Bắt buộc: Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
         "Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard
