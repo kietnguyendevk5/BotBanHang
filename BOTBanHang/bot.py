@@ -16,13 +16,13 @@ from aiohttp import web
 import aiohttp
 
 # ==================== CẤU HÌNH NGÂN HÀNG & BOT ====================
-API_TOKEN = '8735568227:AAFq02ZhIJLfW5ojVg5q3xVYRNeq3AGK9CQ' 
+API_TOKEN = '8742518120:AAHdw7Do6jn7U7tLZg4eDbcbTXTtNTKI-v8' 
 ADMIN_ID = 7718090377         
 BANK_ID = "MB"                    # Mã VietQR của MB Bank
 BANK_ACCOUNT = "0356442864"       # Số tài khoản
 ACCOUNT_NAME = "NGUYEN DIEN TUAN KIET" 
 SUPPORT_TELEGRAM = "@kietnguyen0999" # Thay bằng username Telegram của bạn
-SUPPORT_ZALO = "0356442864"         # Thay bằng số điện thoại Zalo của bạn
+SUPPORT_ZALO = "0356442864"        # Thay bằng số điện thoại Zalo của bạn
 WEBHOOK_HOST = '0.0.0.0'
 SEPAY_API_KEY = os.getenv("SEPAY_API_KEY", "spsk_test_zFCU1AguPj8T7RqzMAMRxSbgaspYi99y")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:fVXjKs8XvC9lljvT@db.xfyfbpqyelrzfsgwhgbc.supabase.co:5432/postgres")
@@ -256,14 +256,14 @@ async def deposit_callback(call: CallbackQuery):
                         f"- Chủ tên: **{ACCOUNT_NAME}**\n"
                         f"- Nội dung chuyển khoản (Bắt buộc): `{syntax}`\n\n"
                         f"⚠️ *Dùng app ngân hàng quét mã QR để nạp tự động sau vài giây.*\n"
-                        f"⚠️ *MIN NẠP 2k.*"
+                        f"⚠️ *MIN NẠP 10,000đ.*"
                     )
                     await call.message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
                 else:
                     await call.message.answer("❌ Không thể tạo mã QR lúc này!")
     except Exception as e:
         logging.error(f"Lỗi tải mã QR: {e}")
-        await call.message.answer(f"💰 Chuyển khoản thủ công:\n- STK: `{BANK_ACCOUNT}`\n- Nội dung: `{syntax}`")
+        await call.message.answer(f"💰 Chuyển khoản thủ công:\n- STK: `{BANK_ACCOUNT}`\n- Nội dung: `{syntax}`\n- MIN NẠP: 10,000đ")
 
     await call.answer()
 
@@ -559,6 +559,15 @@ async def sepay_webhook_handler(request):
         async with db_pool.acquire() as conn:
             exists = await conn.fetchval('SELECT sepay_id FROM transactions WHERE sepay_id = $1', int(sepay_id))
             if exists:
+                return web.json_response({"success": True})
+
+            # 🔥 NẾU DƯỚI 10K THÌ LƯU LẠI GIAO DỊCH NHƯNG GIỮ LUÔN TIỀN (KHÔNG CỘNG VÍ)
+            if transfer_amount < 10000:
+                await conn.execute(
+                    'INSERT INTO transactions (sepay_id, user_id, amount) VALUES ($1, $2, $3)', 
+                    int(sepay_id), 0, transfer_amount
+                )
+                logging.info(f"Khách chuyển dưới 10k ({transfer_amount}đ), bot đã nuốt tiền và không cộng ví.")
                 return web.json_response({"success": True})
 
             match = re.search(r'NAP\D*(\d+)', str(content), re.IGNORECASE)
