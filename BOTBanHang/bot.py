@@ -286,7 +286,7 @@ async def buy_key_menu_callback(call: CallbackQuery):
         f"• Lưu ý: Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
         f"• Chọn gói thời gian bạn muốn mua bên dưới:",
         reply_markup=keyboard,
-        parse_mode="Markdown"
+       
     )
     await call.answer()
 
