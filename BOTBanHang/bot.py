@@ -457,6 +457,30 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
     
     await message_target.answer(success_text, parse_mode="Markdown")
     await message_target.answer_document(document=txt_file)
+
+    # ==================== GỬI THÔNG BÁO CHO ADMIN ====================
+    try:
+        # Lấy thông tin username/name của người mua nếu có
+        user_info = f"ID: `{user_id}`"
+        if hasattr(message_target, 'from_user') and message_target.from_user:
+            user = message_target.from_user
+            username = f"@{user.username}" if user.username else "Không có"
+            name = user.full_name
+            user_info = f"Họ tên: **{name}**\n- Username: {username}\n- ID: `{user_id}`"
+
+        admin_notification = (
+            f"🔔 **CÓ GIAO DỊCH MUA HÀNG MỚI!**\n\n"
+            f"👤 **Thông tin khách hàng:**\n{user_info}\n\n"
+            f"📦 **Sản phẩm:** `{cat_name}`\n"
+            f"🔢 **Số lượng:** `{quantity}`\n"
+            f"💵 **Tổng tiền:** `{total_price:,} VNĐ`\n"
+            f"⏱️ **Thời gian:** {(time.strftime('%Y-%m-%d %H:%M:%S'))}"
+        )
+        await bot.send_message(ADMIN_ID, admin_notification, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Không thể gửi thông báo mua hàng cho Admin: {e}")
+    # ===============================================================
+
     await state.clear()
 
 @dp.message(lambda message: message.document is not None)
