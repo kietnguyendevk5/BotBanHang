@@ -149,7 +149,7 @@ def get_category_info_by_filename(filename):
     elif "GMAIL" in fname:
         return ("cat_gmail", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA - NO AVT - VER GMAIL ", 3500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU|MAIL")
     elif "PHONE" in fname:
-        return ("cat_phone", "CLONE NEW - NAME VIỆT - ON2FA - AVT+BÌA - VER PHONE ", 2500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU")
+        return ("cat_phone", "CLONE NEW - NAME VIỆT - ON2FA - AVT - 3 POST - VER PHONE ", 2500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU")
     else:
         return ("cat_new_zin", "CLONE NGÂM TRÂU - NAME RANDOM - VER HOTMAIL - LIVE ALL 100%", 2000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
 
