@@ -515,7 +515,7 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
             user_name = message_target.from_user.full_name or "Không rõ"
             if message_target.from_user.username:
                 username_str = f"@{message_target.from_user.username}"
-
+        vn_time = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
         admin_notification = (
             f"🔔 CÓ GIAO DỊCH MUA HÀNG MỚI!\n\n"
             f"👤 Khách hàng: {user_name}\n"
@@ -524,7 +524,7 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
             f"📦 Sản phẩm: {cat_name}\n"
             f"🔢 Số lượng: {quantity}\n"
             f"💵 Tổng tiền: {total_price:,} VNĐ\n"
-            f"⏱️ Thời gian: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            f"⏱️ Thời gian: {vn_time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
         # Gửi không dùng parse_mode để tránh lỗi cú pháp ký tự đặc biệt
         await bot.send_message(ADMIN_ID, admin_notification)
