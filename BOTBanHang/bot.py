@@ -153,7 +153,7 @@ def get_category_info_by_filename(filename):
     elif "DIEMAIL" in fname:
         return ("cat_die_mail", "CLONE NGÂM - NAME VIỆT - ON2FA - AVT ADD 20 -50 BB - VER HOTMAIL - MAIL DIE ", 3500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU(MAIL DIE)")
     elif "VIET" in fname:
-        return ("cat_die_mail", "CLONE NGÂM - UP CHUẨN NAME VIỆT - CHƠI TUT - VER HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100% ", 2800, "UID | Pass |COOKIE|TOKEN EAAAAU|MAIL|PASS")     
+        return ("cat_viet", "CLONE NGÂM - UP CHUẨN NAME VIỆT - CHƠI TUT - VER HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100% ", 2800, "UID | Pass |COOKIE|TOKEN EAAAAU|MAIL|PASS")     
     else:
         return ("cat_new_zin", "CLONE NGÂM TRÂU - NAME RANDOM - VER HOTMAIL - LIVE ALL 100%", 2000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
 
