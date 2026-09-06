@@ -546,7 +546,8 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
         await message.reply("⚠️ Vui lòng gửi file có định dạng `.txt`!", parse_mode="Markdown")
         return
 
-    cat_code, cat_name, price, format_desc = get_category_info_by_filename(file_name)
+    # Lấy thông tin phân loại mặc định từ tên file
+    cat_code, default_cat_name, default_price, default_format_desc = get_category_info_by_filename(file_name)
 
     file_info = await bot.get_file(document.file_id)
     file_path = file_info.file_path
@@ -558,13 +559,21 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     added_count = 0
 
     async with db_pool.acquire() as conn:
-        exists = await conn.fetchval('SELECT cat_code FROM categories WHERE cat_code = $1', cat_code)
-        if not exists:
+        # Kiểm tra xem danh mục này đã tồn tại trong database hay chưa
+        existing_cat = await conn.fetchrow('SELECT cat_name, price, format_desc FROM categories WHERE cat_code = $1', cat_code)
+        
+        if not existing_cat:
+            # Nếu chưa có, tạo mới hoàn toàn với giá và thông tin mặc định
             await conn.execute(
                 'INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES ($1, $2, $3, $4)', 
-                cat_code, cat_name, price, format_desc
+                cat_code, default_cat_name, default_price, default_format_desc
             )
+            current_cat_name = default_cat_name
+        else:
+            # Nếu đã có rồi, GIỮ NGUYÊN GIÁ CŨ và thông tin cũ, không ghi đè
+            current_cat_name = existing_cat['cat_name']
 
+        # Thêm các tài khoản vào kho stock
         for line in lines:
             line = line.strip()
             if line:
@@ -574,8 +583,8 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     await message.reply(
         f"📥 **Đã nhập kho thành công!**\n"
         f"- Tên file: `{file_name}`\n"
-        f"- Phân loại vào: **{cat_name[:30]}...**\n"
-        f"- Đã thêm: **{added_count}** tài khoản vào kho.",
+        f"- Phân loại vào: **{current_cat_name[:30]}...**\n"
+        f"- Đã thêm: **{added_count}** tài khoản mới vào kho (giữ nguyên giá cũ nếu danh mục đã tồn tại).",
         parse_mode="Markdown"
     )
 
