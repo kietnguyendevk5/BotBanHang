@@ -501,20 +501,29 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
     
     await message_target.answer(success_text, parse_mode="Markdown")
     await message_target.answer_document(document=txt_file)
-
     # ==================== GỬI THÔNG BÁO CHO ADMIN ====================
     try:
         user_name = "Không rõ"
         username_str = "Không có"
         
+        # Lấy trực tiếp từ from_user của message hoặc callback gốc
+        target_user = None
         if hasattr(message_target, 'from_user') and message_target.from_user:
-            user_name = message_target.from_user.full_name or "Không rõ"
-            if message_target.from_user.username:
-                username_str = f"@{message_target.from_user.username}"
+            target_user = message_target.from_user
         elif isinstance(message_target, types.Message) and message_target.from_user:
-            user_name = message_target.from_user.full_name or "Không rõ"
-            if message_target.from_user.username:
-                username_str = f"@{message_target.from_user.username}"
+            target_user = message_target.from_user
+            
+        if target_user:
+            # Kiểm tra nếu user là bot thì bỏ qua không lấy tên bot
+            if not target_user.is_bot:
+                user_name = target_user.full_name or "Không rõ"
+                if target_user.username:
+                    username_str = f"@{target_user.username}"
+            else:
+                user_name = f"Bot ({target_user.full_name})"
+                if target_user.username:
+                    username_str = f"@{target_user.username}"
+
         vn_time = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
         admin_notification = (
             f"🔔 CÓ GIAO DỊCH MUA HÀNG MỚI!\n\n"
@@ -526,10 +535,10 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
             f"💵 Tổng tiền: {total_price:,} VNĐ\n"
             f"⏱️ Thời gian: {vn_time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
-        # Gửi không dùng parse_mode để tránh lỗi cú pháp ký tự đặc biệt
         await bot.send_message(ADMIN_ID, admin_notification)
     except Exception as e:
         logging.error(f"Không thể gửi thông báo mua hàng cho Admin: {e}")
+    # ===============================================================
     # ===============================================================
 
     await state.clear()
