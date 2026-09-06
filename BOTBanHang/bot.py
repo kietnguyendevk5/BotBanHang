@@ -333,8 +333,12 @@ async def process_buy_key(call: CallbackQuery):
     )
     await call.answer()
 
-@dp.callback_query(lambda c: c.data == "buy_menu")
+@dp.callback_query(lambda c: c.data.startswith("buy_menu"))
 async def buy_menu_callback(call: CallbackQuery):
+    # Hỗ trợ phân trang: data có dạng "buy_menu_0", "buy_menu_1", ...
+    data_parts = call.data.split("_")
+    page = int(data_parts[2]) if len(data_parts) > 2 else 0
+    
     categories = await get_all_categories()
     keyboard_buttons = []
     
@@ -344,21 +348,53 @@ async def buy_menu_callback(call: CallbackQuery):
         details_text += "⚠️ *Shop chưa cập nhật sản phẩm*"
         keyboard_buttons.append([InlineKeyboardButton(text="⚠️ Shop chưa cập nhật sản phẩm", callback_data="back_start")])
     else:
-        for idx, cat in enumerate(categories, 1):
+        # Cấu hình số lượng sản phẩm hiển thị trên 1 trang (ví dụ: 5 sản phẩm/trang)
+        ITEMS_PER_PAGE = 5
+        total_items = len(categories)
+        total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+        
+        # Đảm bảo page nằm trong giới hạn hợp lệ
+        if page >= total_pages:
+            page = total_pages - 1
+        if page < 0:
+            page = 0
+            
+        start_idx = page * ITEMS_PER_PAGE
+        end_idx = start_idx + ITEMS_PER_PAGE
+        current_page_categories = categories[start_idx:end_idx]
+        
+        for i, cat in enumerate(current_page_categories, start=start_idx + 1):
             cat_code, cat_name, price, format_desc = cat['cat_code'], cat['cat_name'], cat['price'], cat['format_desc']
             count = await get_stock_count(cat_code)
             
-            details_text += f"🔹 **{idx}.** `{cat_name}`\n   💰 Giá: `{price:,}đ` | 📦 Còn: `{count}`\n\n"
+            details_text += f"🔹 **{i}.** `{cat_name}`\n    💰 Giá: `{price:,}đ` | 📦 Còn: `{count}`\n\n"
             
-            short_name = cat_name[:35] + "..." if len(cat_name) > 35 else cat_name
-            btn_text = f"{idx}. {short_name} ({price:,}đ)"
+            short_name = cat_name[:30] + "..." if len(cat_name) > 30 else cat_name
+            btn_text = f"{i}. {short_name} ({price:,}đ)"
             keyboard_buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"buy_{cat_code}")])
+        
+        # Tạo hàng nút phân trang nếu tổng số trang lớn hơn 1
+        pagination_buttons = []
+        if page > 0:
+            pagination_buttons.append(InlineKeyboardButton(text="◀️ Trang trước", callback_data=f"buy_menu_{page - 1}"))
+        
+        pagination_buttons.append(InlineKeyboardButton(text=f"📄 {page + 1}/{total_pages}", callback_data="ignore"))
+        
+        if page < total_pages - 1:
+            pagination_buttons.append(InlineKeyboardButton(text="Trang sau ▶️", callback_data=f"buy_menu_{page + 1}"))
             
+        if pagination_buttons:
+            keyboard_buttons.append(pagination_buttons)
+
     keyboard_buttons.append([InlineKeyboardButton(text="⬅️ Quay lại", callback_data="back_start")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     
     details_text += "👇 *Nhấn vào nút tương ứng bên dưới để mua:*"
-    await call.message.edit_text(details_text, reply_markup=keyboard, parse_mode="Markdown")
+    
+    try:
+        await call.message.edit_text(details_text, reply_markup=keyboard, parse_mode="Markdown")
+    except Exception:
+        pass # Tránh lỗi khi nội dung không thay đổi
     await call.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("buy_"))
