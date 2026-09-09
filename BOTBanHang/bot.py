@@ -145,7 +145,7 @@ def get_category_info_by_filename(filename):
     elif "BM" in fname:
         return ("cat_bm", "Clone New đã qua BM", 2500, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     elif "PAGE" in fname or "KEPPAGE" in fname: # <-- THÊM ĐOẠN NÀY ĐỂ NHẬN DIỆN TÀI KHOẢN KẸP PAGE
-        return ("cat_acc_kep_page", "CLONE KẸP 5-10 PAGE RANDOM - ON2FA - AVT-BÌA (RANDOM) ", 6000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")    
+        return ("cat_acc_kep_page", "CLONE KẸP PAGE NAME VIỆT RANDOM 5-10 - ON2FA - AVT-BÌA (RANDOM) ", 6000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")    
     elif "TRUST" in fname or "2FA" in fname:
         return ("cat_fb_2fa_trust", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA, NO AVT - HOTMAIL TRUST ", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail")   
     elif "HOTMAIL" in fname or "OUTLOOK" in fname:
