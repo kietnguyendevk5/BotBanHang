@@ -30,6 +30,7 @@ SEPAY_API_KEY = os.getenv("SEPAY_API_KEY", "spsk_test_zFCU1AguPj8T7RqzMAMRxSbgas
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:fVXjKs8XvC9lljvT@db.xfyfbpqyelrzfsgwhgbc.supabase.co:5432/postgres")
 SELF_URL = "https://botbanhang-s6iq.onrender.com/" # Link bot của bạn trên Render
 BOT_TELE = "@ToolTtc_bot"
+LICENSE_APP_CODE = os.getenv("LICENSE_APP_CODE", "NVC_TTC_FACEBOOK_MANAGER")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
@@ -78,16 +79,47 @@ async def init_db():
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh')
                 )
             ''')
+            # Giữ bảng keys cũ để không làm mất dữ liệu nếu bot đã chạy trước đây.
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS keys (
                     key_code TEXT PRIMARY KEY,
                     duration_days INT NOT NULL,
                     is_used BOOLEAN DEFAULT FALSE,
                     used_by BIGINT,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh'),
-                    expired_at TIMESTAMP WITH TIME ZONE
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    expired_at TIMESTAMPTZ
                 )
             ''')
+
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS licenses (
+                    license_key TEXT PRIMARY KEY,
+                    app_code TEXT NOT NULL DEFAULT 'NVC_TTC_FACEBOOK_MANAGER',
+                    active BOOLEAN NOT NULL DEFAULT TRUE,
+                    duration_days INT NOT NULL DEFAULT 0,
+                    expires_at TIMESTAMPTZ NULL,
+                    machine_id TEXT NULL,
+                    activated_at TIMESTAMPTZ NULL,
+                    last_seen_at TIMESTAMPTZ NULL,
+                    owner_user_id BIGINT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            ''')
+            # Đồng bộ schema nếu bảng licenses đã được tạo trước đó bởi UIMO.
+            await conn.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS duration_days INT NOT NULL DEFAULT 0")
+            await conn.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS owner_user_id BIGINT NULL")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_licenses_machine ON licenses(machine_id)")
+
+            # Tương thích với các key cũ đã được bot tạo trong bảng keys.
+            # Các key cũ sẽ được chuyển sang hệ thống licenses dùng chung.
+            await conn.execute("""
+                INSERT INTO licenses (license_key, app_code, active, duration_days, owner_user_id, created_at)
+                SELECT k.key_code, 'NVC_TTC_FACEBOOK_MANAGER', NOT COALESCE(k.is_used, FALSE), k.duration_days, k.used_by, k.created_at
+                FROM keys k
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM licenses l WHERE l.license_key = k.key_code
+                )
+            """)
         logging.info("Kết nối và khởi tạo cơ sở dữ liệu PostgreSQL thành công!")
     except Exception as e:
         logging.error(f"Lỗi kết nối PostgreSQL: {e}")
@@ -133,7 +165,7 @@ def generate_key_string():
     part1 = ''.join(random.choices(chars, k=4))
     part2 = ''.join(random.choices(chars, k=4))
     part3 = ''.join(random.choices(chars, k=4))
-    return f"TTC-{part1}-{part2}-{part3}"
+    return f"ACP-{part1}-{part2}-{part3}"
 
 # ==================== HÀM PHÂN LOẠI DỰA TRÊN TÊN FILE ====================
 def get_category_info_by_filename(filename):
@@ -318,8 +350,10 @@ async def process_buy_key(call: CallbackQuery):
         async with conn.transaction():
             await conn.execute('UPDATE users SET balance = balance - $1 WHERE user_id = $2', price, user_id)
             await conn.execute(
-                'INSERT INTO keys (key_code, duration_days, is_used) VALUES ($1, $2, FALSE)',
-                new_key, days
+                '''INSERT INTO licenses
+                   (license_key, app_code, active, duration_days, owner_user_id)
+                   VALUES ($1, $2, TRUE, $3, $4)''',
+                new_key, LICENSE_APP_CODE, days, user_id
             )
 
     new_balance = await get_user_balance(user_id)
