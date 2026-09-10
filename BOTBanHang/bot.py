@@ -115,9 +115,10 @@ async def init_db():
             # Các key cũ sẽ được chuyển sang hệ thống licenses dùng chung.
             await conn.execute("""
                 INSERT INTO licenses (license_key, app_code, active, duration_days, owner_user_id, created_at)
-                SELECT k.key_code, 'NVC_TTC_FACEBOOK_MANAGER', NOT COALESCE(k.is_used, FALSE), k.duration_days, k.used_by, k.created_at
+                SELECT k.key_code, 'NVC_TTC_FACEBOOK_MANAGER', NOT COALESCE(k.is_used, FALSE), k.duration_days, k.used_by::bigint, k.created_at
                 FROM keys k
-                WHERE NOT EXISTS (
+                WHERE k.used_by IS NOT NULL AND k.used_by != '' 
+                AND NOT EXISTS (
                     SELECT 1 FROM licenses l WHERE l.license_key = k.key_code
                 )
             """)
