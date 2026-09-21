@@ -7,6 +7,7 @@ import requests
 import asyncpg
 import random
 import string
+import urllib.parse
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BufferedInputFile
@@ -19,20 +20,21 @@ import aiohttp
 
 # ==================== CẤU HÌNH NGÂN HÀNG & BOT ====================
 API_TOKEN = '8735568227:AAFq02ZhIJLfW5ojVg5q3xVYRNeq3AGK9CQ' 
-ADMIN_ID = 7718090377         
+ADMIN_ID = 7718090377          
 BANK_ID = "MB"                
 BANK_ACCOUNT = "0356442864"       
 ACCOUNT_NAME = "NGUYEN DIEN TUAN KIET" 
 SUPPORT_TELEGRAM = "@kietnguyen0999" 
 SUPPORT_ZALO = "0356442864"        
 WEBHOOK_HOST = '0.0.0.0'
+PORT = int(os.getenv("PORT", 8080))
 SEPAY_API_KEY = os.getenv("SEPAY_API_KEY", "spsk_test_zFCU1AguPj8T7RqzMAMRxSbgaspYi99y")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:fVXjKs8XvC9lljvT@db.xfyfbpqyelrzfsgwhgbc.supabase.co:5432/postgres")
 SELF_URL = "https://botbanhang-s6iq.onrender.com/" 
 BOT_TELE = "@ToolTtc_bot"
 LICENSE_APP_CODE = os.getenv("LICENSE_APP_CODE", "NVC_TTC_FACEBOOK_MANAGER")
 
-# 🟢 KHỞI TẠO LUÔN Ở ĐÂY TRƯỚC KHI DÙNG @dp
+# 🟢 KHỞI TẠO KHỞI ĐẦU
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
@@ -48,7 +50,6 @@ class BuyState(StatesGroup):
 async def init_db():
     global db_pool
     try:
-        # Thêm statement_cache_size=0 để tránh lỗi DuplicatePreparedStatementError với PgBouncer
         db_pool = await asyncpg.create_pool(DATABASE_URL, statement_cache_size=0)
         async with db_pool.acquire() as conn:
             await conn.execute('''
@@ -80,7 +81,6 @@ async def init_db():
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh')
                 )
             ''')
-            # Giữ bảng keys cũ để không làm mất dữ liệu nếu bot đã chạy trước đây.
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS keys (
                     key_code TEXT PRIMARY KEY,
@@ -91,7 +91,6 @@ async def init_db():
                     expired_at TIMESTAMPTZ
                 )
             ''')
-
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS licenses (
                     license_key TEXT PRIMARY KEY,
@@ -106,13 +105,10 @@ async def init_db():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             ''')
-            # Đồng bộ schema nếu bảng licenses đã được tạo trước đó bởi UIMO.
             await conn.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS duration_days INT NOT NULL DEFAULT 0")
             await conn.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS owner_user_id BIGINT NULL")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_licenses_machine ON licenses(machine_id)")
 
-            # Tương thích với các key cũ đã được bot tạo trong bảng keys.
-            # Các key cũ sẽ được chuyển sang hệ thống licenses dùng chung.
             await conn.execute("""
                 INSERT INTO licenses (license_key, app_code, active, duration_days, owner_user_id, created_at)
                 SELECT k.key_code, 'NVC_TTC_FACEBOOK_MANAGER', NOT COALESCE(k.is_used, FALSE), k.duration_days, k.used_by::bigint, k.created_at
@@ -169,6 +165,9 @@ def generate_key_string():
     part3 = ''.join(random.choices(chars, k=4))
     return f"ACP-{part1}-{part2}-{part3}"
 
+def urllib_quote(text):
+    return urllib.parse.quote(text)
+
 # ==================== HÀM PHÂN LOẠI DỰA TRÊN TÊN FILE ====================
 def get_category_info_by_filename(filename):
     fname = filename.upper()
@@ -180,7 +179,7 @@ def get_category_info_by_filename(filename):
         return ("cat_bm", "Clone New đã qua BM", 2500, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     elif "NEWZIN" in fname:
         return ("cat_new_zin", "Clone 6159 NAME NGOẠI IP VIỆT VER GMAIL ĐÃ ĐÁ MAIL - ON2FA - NEW ZIN ALL 100% LIVE(Nên mua ít test kỹ trước khi mua SLL)", 1500, "UID | Pass | 2FA | Cookie | Token |MAIL ẢO")    
-    elif "PAGE" in fname or "KEPPAGE" in fname: # <-- THÊM ĐOẠN NÀY ĐỂ NHẬN DIỆN TÀI KHOẢN KẸP PAGE
+    elif "PAGE" in fname or "KEPPAGE" in fname:
         return ("cat_acc_kep_page", "CLONE KẸP PAGE NAME VIỆT RANDOM 5-10 - ON2FA - AVT-BÌA (RANDOM) ", 6000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")    
     elif "TRUST" in fname or "2FA" in fname:
         return ("cat_fb_2fa_trust", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA, NO AVT - HOTMAIL TRUST ", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail")   
@@ -301,10 +300,6 @@ async def deposit_callback(call: CallbackQuery):
 
     await call.answer()
 
-def urllib_quote(text):
-    import urllib.parse
-    return urllib.parse.quote(text)
-
 # ==================== TÍNH NĂNG MUA KEY TOOL ====================
 @dp.callback_query(lambda c: c.data == "buy_key_menu")
 async def buy_key_menu_callback(call: CallbackQuery):
@@ -320,15 +315,14 @@ async def buy_key_menu_callback(call: CallbackQuery):
         f"• Lưu ý: Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
         f"• Chọn gói thời gian bạn muốn mua bên dưới:",
         reply_markup=keyboard,
-       
     )
     await call.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("buykey_"))
 async def process_buy_key(call: CallbackQuery):
     days = int(call.data.replace("buykey_", ""))
-    price = days * 1000  # 1k 1 ngày 1 key
-    user_id = int(call.from_user.id) # 👈 Ép kiểu rõ ràng sang int ở đây
+    price = days * 1000 
+    user_id = int(call.from_user.id)
 
     balance = await get_user_balance(user_id)
     if balance < price:
@@ -342,7 +336,7 @@ async def process_buy_key(call: CallbackQuery):
             await conn.execute(
                 '''INSERT INTO licenses
                    (license_key, app_code, active, duration_days, owner_user_id)
-                   VALUES ($1, $2, TRUE, $3, $4::bigint)''', # 👈 Thêm ép kiểu ::bigint ở tham số thứ 4 phòng hờ
+                   VALUES ($1, $2, TRUE, $3, $4::bigint)''',
                 new_key, LICENSE_APP_CODE, days, user_id
             )
 
@@ -363,7 +357,6 @@ async def process_buy_key(call: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data.startswith("buy_menu"))
 async def buy_menu_callback(call: CallbackQuery):
-    # Hỗ trợ phân trang: data có dạng "buy_menu_0", "buy_menu_1", ...
     data_parts = call.data.split("_")
     page = int(data_parts[2]) if len(data_parts) > 2 else 0
     
@@ -376,12 +369,10 @@ async def buy_menu_callback(call: CallbackQuery):
         details_text += "⚠️ *Shop chưa cập nhật sản phẩm*"
         keyboard_buttons.append([InlineKeyboardButton(text="⚠️ Shop chưa cập nhật sản phẩm", callback_data="back_start")])
     else:
-        # Cấu hình số lượng sản phẩm hiển thị trên 1 trang (ví dụ: 5 sản phẩm/trang)
         ITEMS_PER_PAGE = 5
         total_items = len(categories)
         total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
         
-        # Đảm bảo page nằm trong giới hạn hợp lệ
         if page >= total_pages:
             page = total_pages - 1
         if page < 0:
@@ -401,7 +392,6 @@ async def buy_menu_callback(call: CallbackQuery):
             btn_text = f"{i}. {short_name} ({price:,}đ)"
             keyboard_buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"buy_{cat_code}")])
         
-        # Tạo hàng nút phân trang nếu tổng số trang lớn hơn 1
         pagination_buttons = []
         if page > 0:
             pagination_buttons.append(InlineKeyboardButton(text="◀️ Trang trước", callback_data=f"buy_menu_{page - 1}"))
@@ -422,7 +412,7 @@ async def buy_menu_callback(call: CallbackQuery):
     try:
         await call.message.edit_text(details_text, reply_markup=keyboard, parse_mode="Markdown")
     except Exception:
-        pass # Tránh lỗi khi nội dung không thay đổi
+        pass
     await call.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("buy_"))
@@ -526,19 +516,18 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
     
     await message_target.answer(success_text, parse_mode="Markdown")
     await message_target.answer_document(document=txt_file)
-   # ==================== GỬI THÔNG BÁO CHO ADMIN ====================
+
+    # GỬI THÔNG BÁO CHO ADMIN
     try:
         user_name = "Không rõ"
         username_str = "Không có"
         
-        # Lấy thông tin user chuẩn xác trực tiếp từ Telegram API dựa vào user_id của người mua
         try:
             chat_member = await bot.get_chat(user_id)
             user_name = chat_member.full_name or "Không rõ"
             if chat_member.username:
                 username_str = f"@{chat_member.username}"
         except Exception:
-            # Fallback nếu không gọi được API get_chat
             if hasattr(message_target, 'from_user') and message_target.from_user and not message_target.from_user.is_bot:
                 user_name = message_target.from_user.full_name or "Không rõ"
                 if message_target.from_user.username:
@@ -558,7 +547,6 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
         await bot.send_message(ADMIN_ID, admin_notification)
     except Exception as e:
         logging.error(f"Không thể gửi thông báo mua hàng cho Admin: {e}")
-    # ===============================================================
 
     await state.clear()
 
@@ -576,7 +564,6 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
         await message.reply("⚠️ Vui lòng gửi file có định dạng `.txt`!", parse_mode="Markdown")
         return
 
-    # Lấy thông tin phân loại mặc định từ tên file
     cat_code, default_cat_name, default_price, default_format_desc = get_category_info_by_filename(file_name)
 
     file_info = await bot.get_file(document.file_id)
@@ -589,21 +576,17 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     added_count = 0
 
     async with db_pool.acquire() as conn:
-        # Kiểm tra xem danh mục này đã tồn tại trong database hay chưa
         existing_cat = await conn.fetchrow('SELECT cat_name, price, format_desc FROM categories WHERE cat_code = $1', cat_code)
         
         if not existing_cat:
-            # Nếu chưa có, tạo mới hoàn toàn với giá và thông tin mặc định
             await conn.execute(
                 'INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES ($1, $2, $3, $4)', 
                 cat_code, default_cat_name, default_price, default_format_desc
             )
             current_cat_name = default_cat_name
         else:
-            # Nếu đã có rồi, GIỮ NGUYÊN GIÁ CŨ và thông tin cũ, không ghi đè
             current_cat_name = existing_cat['cat_name']
 
-        # Thêm các tài khoản vào kho stock
         for line in lines:
             line = line.strip()
             if line:
@@ -614,7 +597,7 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
         f"📥 **Đã nhập kho thành công!**\n"
         f"- Tên file: `{file_name}`\n"
         f"- Phân loại vào: **{current_cat_name[:30]}...**\n"
-        f"- Đã thêm: **{added_count}** tài khoản mới vào kho (giữ nguyên giá cũ nếu danh mục đã tồn tại).",
+        f"- Đã thêm: **{added_count}** tài khoản mới vào kho.",
         parse_mode="Markdown"
     )
 
@@ -643,7 +626,7 @@ async def sepay_webhook_handler(request):
         
         if not auth_header or auth_header != expected_auth:
             logging.warning("Cảnh báo: Webhook SePay gọi đến nhưng sai hoặc thiếu API Key!")
-            return web.json_response({"success": False, "error": "Unauthorized: Invalid API Key"}, status=401)
+            return web.json_response({"success": False, "error": "Unauthorized"}, status=401)
 
         try:
             data = await request.json()
@@ -651,12 +634,10 @@ async def sepay_webhook_handler(request):
             logging.error(f"Lỗi đọc JSON từ SePay: {e}")
             return web.json_response({"success": False, "error": "Invalid JSON"}, status=400)
 
-        logging.info(f"Nhận được webhook hợp lệ từ SePay: {data}")
-
         sepay_id = data.get("id") or data.get("transactionId")
         transfer_type = data.get("transferType") or data.get("type")
-        
         raw_amount = data.get("transferAmount") or data.get("amount") or 0
+        
         try:
             transfer_amount = int(float(raw_amount))
         except (ValueError, TypeError):
@@ -675,19 +656,16 @@ async def sepay_webhook_handler(request):
             if exists:
                 return web.json_response({"success": True})
 
-            # 🔥 NẾU DƯỚI 10K THÌ LƯU LẠI GIAO DỊCH NHƯNG GIỮ LUÔN TIỀN (KHÔNG CỘNG VÍ)
             if transfer_amount < 10000:
                 await conn.execute(
                     'INSERT INTO transactions (sepay_id, user_id, amount) VALUES ($1, $2, $3)', 
                     int(sepay_id), 0, transfer_amount
                 )
-                logging.info(f"Khách chuyển dưới 10k ({transfer_amount}đ), bot đã nuốt tiền và không cộng ví.")
                 return web.json_response({"success": True})
 
             match = re.search(r'NAP\D*(\d+)', str(content), re.IGNORECASE)
             if match:
                 target_user_id = int(match.group(1))
-                
                 user_check = await conn.fetchrow('SELECT balance FROM users WHERE user_id = $1', target_user_id)
                 if not user_check:
                     await conn.execute('INSERT INTO users (user_id, balance) VALUES ($1, 0)', target_user_id)
@@ -707,80 +685,40 @@ async def sepay_webhook_handler(request):
                     )
                 except Exception as e:
                     logging.error(f"Lỗi gửi tin nhắn Telegram cho user {target_user_id}: {e}")
-            else:
-                logging.warning(f"Không tìm thấy cú pháp NAP trong nội dung: '{content}'")
 
         return web.json_response({"success": True})
-
     except Exception as e:
-        logging.error(f"LỖI NGHIÊM TRỌNG TRONG WEBHOOK SEPAY: {str(e)}", exc_info=True)
+        logging.error(f"Lỗi xử lý webhook SePay: {e}")
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
-async def scheduled_notification_task():
-    interval = 10 * 3600  
-    await asyncio.sleep(10)
-    
-    while True:
-        try:
-            if db_pool:
-                async with db_pool.acquire() as conn:
-                    rows = await conn.fetch('SELECT user_id FROM users')
-                    
-                    for row in rows:
-                        user_id = row['user_id']
-                        try:
-                            await bot.send_message(
-                                user_id,
-                                "🔔 **Thông báo định kỳ:**\n"
-                                "Shop vẫn hoạt động 24/7. AE cần mua clone hoặc key tool giá rẻ cứ ghé shop ủng hộ mình nhé!",
-                                parse_mode="Markdown"
-                            )
-                            await asyncio.sleep(10) 
-                        except Exception as e:
-                            logging.error(f"Không thể gửi tin nhắn cho user {user_id}: {e}")
-                            
-            logging.info("Đã gửi thông báo định kỳ 10 tiếng cho người dùng.")
-        except Exception as e:
-            logging.error(f"Lỗi trong task thông báo định kỳ: {e}")
-            
-        await asyncio.sleep(interval)
+async def health_check(request):
+    return web.Response(text="Bot is running!")
 
-async def keep_alive_task():
-    interval = 3 * 60  
-    print(f"--- Bắt đầu script giữ sống cho: {SELF_URL} ---")
-    while True:
-        await asyncio.sleep(interval)
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(SELF_URL, timeout=10) as response:
-                    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-                    if response.status == 200:
-                        logging.info(f"[{current_time}] Ping giữ sống thành công! Mã phản hồi: {response.status}")
-                    else:
-                        logging.warning(f"[{current_time}] Server phản hồi mã lạ khi ping: {response.status}")
-        except Exception as e:
-            current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-            logging.error(f"[{current_time}] Lỗi khi ping giữ sống: {e}")
-
+# ==================== KHỞI CHẠY HỆ THỐNG ====================
 async def main():
+    # 1. Khởi tạo Database
     await init_db()
 
+    # 2. XÓA WEBHOOK CŨ ĐỂ TRÁNH XUNG ĐỘT getUpdates (SỬA LỖI TelegramConflictError)
+    await bot.delete_webhook(drop_pending_updates=True)
+    logging.info("Đã xóa Webhook Telegram thành công!")
+
+    # 3. Khởi tạo Server Web cho SePay Webhook (Aiohttp)
     app = web.Application()
-    app.router.add_post('/api/webhook/sepay', sepay_webhook_handler)
-    app.router.add_get('/', lambda request: web.Response(text="Bot is running!"))
+    app.router.add_post('/sepay-webhook', sepay_webhook_handler)
+    app.router.add_get('/', health_check)
     
     runner = web.AppRunner(app)
     await runner.setup()
-    
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, WEBHOOK_HOST, port)
+    site = web.TCPSite(runner, WEBHOOK_HOST, PORT)
     await site.start()
-    print(f"🌐 Webhook Server đang chạy tại cổng {port}...")
+    logging.info(f"Web server SePay đang chạy tại cổng {PORT}")
 
-    asyncio.create_task(keep_alive_task())
-    asyncio.create_task(scheduled_notification_task())
-    print("🤖 Bot Telegram đang khởi động...")
-    await dp.start_polling(bot)
+    # 4. Khởi chạy Telegram Bot Polling
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await runner.cleanup()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())
