@@ -178,6 +178,8 @@ def get_category_info_by_filename(filename):
         return ("cat_fix_viet", "CLONE CHUẨN NAME VIỆT - VER HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%", 2800, "UID | Pass | Cookie|Token|Hotmail | Pass Hotmail ")
     elif "BM" in fname:
         return ("cat_bm", "Clone New đã qua BM", 2500, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
+     elif "NEW" in fname:
+        return ("cat_new", "Clone 6159 NGOẠI VER GMAIL ĐÃ ĐÁ MAIL - ON2FA - NEW ZIN ALL 100% LIVE(Nên mua ít test kỹ trước khi mua SLL)", 1500, "UID | Pass | 2FA | Cookie | Token |MAIL ẢO")    
     elif "PAGE" in fname or "KEPPAGE" in fname: # <-- THÊM ĐOẠN NÀY ĐỂ NHẬN DIỆN TÀI KHOẢN KẸP PAGE
         return ("cat_acc_kep_page", "CLONE KẸP PAGE NAME VIỆT RANDOM 5-10 - ON2FA - AVT-BÌA (RANDOM) ", 6000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")    
     elif "TRUST" in fname or "2FA" in fname:
@@ -208,9 +210,6 @@ async def cmd_start(message: types.Message):
             InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit"),
             InlineKeyboardButton(text="👤 Tài Khoản", callback_data="profile")
         ],
-        [
-            InlineKeyboardButton(text="🛠️ Hỗ Trợ & Bảo Hành", callback_data="support")
-        ]
     ])
     
     await message.answer(
@@ -218,7 +217,6 @@ async def cmd_start(message: types.Message):
         f"👋 Chào mừng bạn đến với shop!\n"
         f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
         f"🛡️ Chính sách & Lưu ý:\n"
-        f"• Bảo hành 1 đổi 1 nếu lỗi lần đầu đăng nhập.\n"
         f"• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
         f"• Bắt buộc: Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
         f"Vui lòng chọn chức năng bên dưới:",
@@ -231,10 +229,7 @@ async def support_callback(call: CallbackQuery):
         [InlineKeyboardButton(text="⬅️ Quay lại", callback_data="back_start")]
     ])
     await call.message.edit_text(
-        f"🛠️ **HƯỚNG DẪN HỖ TRỢ & BẢO HÀNH**\n\n"
-        f"🛡️ **Chính sách bảo hành:**\n"
-        f"- Bảo hành **1 đổi 1** cho các tài khoản lỗi (Sai pass, die, checkpoint ngay lần đầu đăng nhập trong vòng 24h).\n"
-        f"- Yêu cầu: Có video quay lại quá trình mua và check tài khoản hoặc có ảnh thời gian lúc mua.\n\n"
+        f"🛠️ **HƯỚNG DẪN HỖ TRỢ**\n\n"
         f"📞 **Liên hệ hỗ trợ trực tiếp:**\n"
         f"- Telegram: `{SUPPORT_TELEGRAM}`\n"
         f"- Zalo: `{SUPPORT_ZALO}`",
@@ -254,18 +249,11 @@ async def back_start_callback(call: CallbackQuery):
             InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit"),
             InlineKeyboardButton(text="👤 Tài Khoản", callback_data="profile")
         ],
-        [
-            InlineKeyboardButton(text="🛠️ Hỗ Trợ & Bảo Hành", callback_data="support")
-        ]
     ])
     await call.message.edit_text(
         f"🤖 HỆ THỐNG BÁN VIA/CLONE & KEY TOOL TỰ ĐỘNG 24/7\n\n"
         f"👋 Chào mừng bạn đến với shop!\n"
         f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
-        f"🛡️ Chính sách & Lưu ý:\n"
-        f"• Bảo hành 1 đổi 1 nếu lỗi lần đầu đăng nhập.\n"
-        f"• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
-        f"• Bắt buộc: Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
         f"Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard
     )
@@ -532,8 +520,7 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
         f"🔢 Số lượng: `{quantity}` con\n"
         f"💵 Tổng tiền: `{total_price:,} VNĐ`\n"
         f"💰 Số dư ví còn lại: `{new_balance:,} VNĐ`\n\n"
-        f"🛡️ *Bảo hành 1 đổi 1 lỗi lần đầu đăng nhập.*\n"
-        f"📞 *Hỗ trợ / Khiếu nại liên hệ Telegram:* `{SUPPORT_TELEGRAM}`\n\n"
+        f"📞 *Hỗ trợ liên hệ Telegram:* `{SUPPORT_TELEGRAM}`\n\n"
         f"📄 *Danh sách tài khoản của bạn đã được đính kèm ở file bên dưới:*"
     )
     
