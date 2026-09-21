@@ -178,7 +178,7 @@ def get_category_info_by_filename(filename):
         return ("cat_fix_viet", "CLONE CHUẨN NAME VIỆT - VER HOTMAIL - AVT - CHẠY JOBS - LIVE ALL 100%", 2800, "UID | Pass | Cookie|Token|Hotmail | Pass Hotmail ")
     elif "BM" in fname:
         return ("cat_bm", "Clone New đã qua BM", 2500, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
-     elif "NEWZIN" in fname:
+    elif "NEWZIN" in fname:
         return ("cat_new_zin", "Clone 6159 NGOẠI VER GMAIL ĐÃ ĐÁ MAIL - ON2FA - NEW ZIN ALL 100% LIVE(Nên mua ít test kỹ trước khi mua SLL)", 1500, "UID | Pass | 2FA | Cookie | Token |MAIL ẢO")    
     elif "PAGE" in fname or "KEPPAGE" in fname: # <-- THÊM ĐOẠN NÀY ĐỂ NHẬN DIỆN TÀI KHOẢN KẸP PAGE
         return ("cat_acc_kep_page", "CLONE KẸP PAGE NAME VIỆT RANDOM 5-10 - ON2FA - AVT-BÌA (RANDOM) ", 6000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")    
