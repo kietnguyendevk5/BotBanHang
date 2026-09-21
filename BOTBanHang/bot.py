@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 import aiohttp
 
 # ==================== CẤU HÌNH NGÂN HÀNG & BOT ====================
-API_TOKEN = '8735568227:AAGXspOwUUypwcbwUau8yWydSScpfiuEd8Y' 
+API_TOKEN = '8817044998:AAEe0u1KgQF2-xXwCJ5aABdDu5hFx8w3LsQ' 
 ADMIN_ID = 7718090377         
 BANK_ID = "MB"                
 BANK_ACCOUNT = "0356442864"       
