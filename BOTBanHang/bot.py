@@ -193,7 +193,7 @@ def get_category_info_by_filename(filename):
     elif "DIEMAIL" in fname:
         return ("cat_die_mail", "CLONE NGÂM - NAME VIỆT - ON2FA - AVT ADD 20 -50 BB - VER HOTMAIL - MAIL DIE ", 3500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU(MAIL DIE)")    
     else:
-        return ("cat_new_zin", "CLONE NGÂM TRÂU - NAME RANDOM - VER HOTMAIL - LIVE ALL 100%", 2000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
+        return ("cat_new_zin_ngam", "CLONE NGÂM TRÂU - NAME RANDOM - VER HOTMAIL - LIVE ALL 100%", 2000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
 
 # ==================== CÁC LỆNH CỦA BOT TELEGRAM ====================
 @dp.message(Command("start"))
