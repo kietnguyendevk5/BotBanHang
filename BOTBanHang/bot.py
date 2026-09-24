@@ -179,7 +179,7 @@ def get_category_info_by_filename(filename):
     elif "BM" in fname:
         return ("cat_bm", "Clone New đã qua BM", 2500, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     elif "NEWZIN" in fname:
-        return ("cat_new_zin", "Clone 6159 - ON2FA -  NAME NGOẠI IP VIỆT VER GMAIL - NEW ZIN ALL(Nên mua ít test kỹ trước khi mua SLL)", 1500, "UID | Pass | 2FA | Cookie | Token |MAIL ẢO")    
+        return ("cat_new_zin", "Clone 6159 - ON2FA -  NAME NGOẠI IP VIỆT - NEW ZIN ALL(Nên mua ít test kỹ trước khi mua SLL)", 1500, "UID | Pass | 2FA | Cookie | Token |MAIL ẢO")    
     elif "PAGE" in fname or "KEPPAGE" in fname: # <-- THÊM ĐOẠN NÀY ĐỂ NHẬN DIỆN TÀI KHOẢN KẸP PAGE
         return ("cat_acc_kep_page", "CLONE KẸP PAGE NAME VIỆT RANDOM 5-10 - ON2FA - AVT-BÌA (RANDOM) ", 6000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")    
     elif "TRUST" in fname or "2FA" in fname:
