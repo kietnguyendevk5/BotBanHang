@@ -43,7 +43,7 @@ CHECK_HEADERS = {
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
 }
 
-# 🟢 KHỞI TẠO LUÔN Ở ĐÂY TRƯỚC KHI DÙNG @dp
+# 🟢 KHỞI TẠO CÁC BIẾN BAN ĐẦU
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
@@ -55,7 +55,7 @@ db_pool = None
 class BuyState(StatesGroup):
     waiting_for_quantity = State()
 
-# ==================== HÀM CHECK LIVE UID FB ====================
+# ==================== HÀM CHECK LIVE & LỌC TRÙNG UID FB ====================
 def check_single_uid(account_info):
     """
     Tách UID từ dòng account_info và kiểm tra xem có LIVE hay không.
@@ -87,13 +87,32 @@ def check_single_uid(account_info):
 
 def filter_live_accounts(accounts, max_workers=10):
     """
-    Chạy đa luồng kiểm tra danh sách tài khoản, trả về danh sách (LIVE, DIE).
+    1. Lọc trùng UID trong danh sách đầu vào.
+    2. Chạy đa luồng kiểm tra danh sách tài khoản duy nhất.
+    Trả về danh sách (LIVE, DIE_HOAC_TRUNG).
     """
+    unique_accounts = []
+    seen_uids = set()
+    duplicate_accs = []
+
+    # 🔹 BƯỚC 1: LỌC TRÙNG ID (UID)
+    for acc in accounts:
+        acc_str = acc.strip()
+        if not acc_str:
+            continue
+        uid = acc_str.split('|')[0].strip()
+        if uid in seen_uids:
+            duplicate_accs.append(acc_str)
+        else:
+            seen_uids.add(uid)
+            unique_accounts.append(acc_str)
+
+    # 🔹 BƯỚC 2: CHECK LIVE ĐA LUỒNG CHO DANH SÁCH KHÔNG TRÙNG
     live_accs = []
-    die_accs = []
-    
+    die_accs = duplicate_accs  # Tính luôn trùng UID vào danh sách không bàn giao
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_acc = {executor.submit(check_single_uid, acc): acc for acc in accounts}
+        future_to_acc = {executor.submit(check_single_uid, acc): acc for acc in unique_accounts}
         for future in as_completed(future_to_acc):
             acc_info, is_live, status_msg = future.result()
             if is_live:
@@ -272,6 +291,7 @@ async def cmd_start(message: types.Message):
         f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
         f"🛡️ Chính sách & Lưu ý:\n"
         f"• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
+        f"• Bắt buộc: Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
         f"Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard
     )
@@ -556,24 +576,24 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
     # Rút acc từ database
     accounts = await buy_multiple_accounts_from_stock(cat_code, quantity)
     
-    # 🔍 THÔNG BÁO TIẾN HÀNH CHECK LIVE UID BẰNG HÀM CHECK LIVE ĐÃ TÍCH HỢP
-    status_msg = await message_target.answer("🔄 **Đang kiểm tra trực tiếp trạng thái Live UID trước khi bàn giao...**", parse_mode="Markdown")
+    # 🔍 THÔNG BÁO TIẾN HÀNH CHECK LIVE VÀ LỌC TRÙNG ID
+    status_msg = await message_target.answer("🔄 **Đang lọc trùng UID & kiểm tra trực tiếp trạng thái Live...**", parse_mode="Markdown")
     
     loop = asyncio.get_running_loop()
-    live_accounts, die_accounts = await loop.run_in_executor(None, filter_live_accounts, accounts, 10)
+    live_accounts, invalid_accounts = await loop.run_in_executor(None, filter_live_accounts, accounts, 10)
     
     live_qty = len(live_accounts)
-    die_qty = len(die_accounts)
+    invalid_qty = len(invalid_accounts)
     
-    # Trường hợp nếu tất cả acc rút ra đều hỏng
+    # Trường hợp nếu tất cả acc rút ra đều hỏng hoặc trùng
     if live_qty == 0:
         await update_balance(user_id, total_price) # Hoàn lại tiền 100%
-        await status_msg.edit_text("❌ Tất cả tài khoản trong đợt rút này bị lỗi/DIE! Bot đã hoàn lại 100% tiền cho bạn.")
+        await status_msg.edit_text("❌ Tất cả tài khoản trong đợt rút này bị lỗi/DIE/Trùng ID! Bot đã hoàn lại 100% tiền cho bạn.")
         await state.clear()
         return
 
-    # Nếu có nick die, tính toán số tiền hoàn lại cho nick hỏng
-    refund_amount = die_qty * price
+    # Nếu có nick die/trùng, tính toán số tiền hoàn lại cho nick lỗi
+    refund_amount = invalid_qty * price
     actual_spent = live_qty * price
     if refund_amount > 0:
         await update_balance(user_id, refund_amount)
@@ -584,7 +604,7 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
     file_bytes = file_content.encode('utf-8')
     txt_file = BufferedInputFile(file_bytes, filename=f"Accounts_LIVE_{live_qty}pcs.txt")
 
-    refund_text = f"\n💸 *Đã hoàn lại:* `{refund_amount:,} VNĐ` (do có {die_qty} nick DIE)" if refund_amount > 0 else ""
+    refund_text = f"\n💸 *Đã hoàn lại:* `{refund_amount:,} VNĐ` (do có {invalid_qty} nick DIE/Trùng UID)" if refund_amount > 0 else ""
 
     success_text = (
         f"✅ **Giao dịch thành công!**\n"
