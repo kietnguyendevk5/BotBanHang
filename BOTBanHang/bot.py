@@ -7,6 +7,8 @@ import requests
 import asyncpg
 import random
 import string
+import aiohttp
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BufferedInputFile
@@ -15,8 +17,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiohttp import web
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import aiohttp
- 
+from urllib.parse import quote as urllib_quote
+
 # ==================== CẤU HÌNH NGÂN HÀNG & BOT ====================
 API_TOKEN = '8817044998:AAEe0u1KgQF2-xXwCJ5aABdDu5hFx8w3LsQ' 
 ADMIN_ID = 7718090377         
@@ -32,6 +34,15 @@ SELF_URL = "https://botbanhang-s6iq.onrender.com/"
 BOT_TELE = "@ToolTtc_bot"
 LICENSE_APP_CODE = os.getenv("LICENSE_APP_CODE", "NVC_TTC_FACEBOOK_MANAGER")
 
+# Headers kiểm tra Live UID
+CHECK_HEADERS = {
+    'accept': '*/*',
+    'accept-language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+    'origin': 'https://timuid.com',
+    'referer': 'https://timuid.com/',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+}
+
 # 🟢 KHỞI TẠO LUÔN Ở ĐÂY TRƯỚC KHI DÙNG @dp
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
@@ -44,11 +55,58 @@ db_pool = None
 class BuyState(StatesGroup):
     waiting_for_quantity = State()
 
+# ==================== HÀM CHECK LIVE UID FB ====================
+def check_single_uid(account_info):
+    """
+    Tách UID từ dòng account_info và kiểm tra xem có LIVE hay không.
+    """
+    raw_info = account_info.strip()
+    if not raw_info:
+        return raw_info, False, "Empty line"
+        
+    uid = raw_info.split('|')[0].strip()
+    params = {'redirect': 'false'}
+    try:
+        response = requests.get(
+            f'https://graph.facebook.com/{uid}/picture',
+            params=params,
+            headers=CHECK_HEADERS,
+            timeout=5
+        )
+        if response.status_code == 200:
+            data = response.json().get('data', {})
+            url = data.get('url', '')
+            if 'scontent' in url and 'height' in data:
+                return raw_info, True, "LIVE"
+            else:
+                return raw_info, False, "DIE"
+        else:
+            return raw_info, False, f"Status code: {response.status_code}"
+    except Exception as e:
+        return raw_info, False, str(e)
+
+def filter_live_accounts(accounts, max_workers=10):
+    """
+    Chạy đa luồng kiểm tra danh sách tài khoản, trả về danh sách (LIVE, DIE).
+    """
+    live_accs = []
+    die_accs = []
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_acc = {executor.submit(check_single_uid, acc): acc for acc in accounts}
+        for future in as_completed(future_to_acc):
+            acc_info, is_live, status_msg = future.result()
+            if is_live:
+                live_accs.append(acc_info)
+            else:
+                die_accs.append(acc_info)
+                
+    return live_accs, die_accs
+
 # ==================== KHỞI TẠO DATABASE POSTGRESQL ====================
 async def init_db():
     global db_pool
     try:
-        # Thêm statement_cache_size=0 để tránh lỗi DuplicatePreparedStatementError với PgBouncer
         db_pool = await asyncpg.create_pool(DATABASE_URL, statement_cache_size=0)
         async with db_pool.acquire() as conn:
             await conn.execute('''
@@ -80,7 +138,6 @@ async def init_db():
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh')
                 )
             ''')
-            # Giữ bảng keys cũ để không làm mất dữ liệu nếu bot đã chạy trước đây.
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS keys (
                     key_code TEXT PRIMARY KEY,
@@ -106,13 +163,10 @@ async def init_db():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             ''')
-            # Đồng bộ schema nếu bảng licenses đã được tạo trước đó bởi UIMO.
             await conn.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS duration_days INT NOT NULL DEFAULT 0")
             await conn.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS owner_user_id BIGINT NULL")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_licenses_machine ON licenses(machine_id)")
 
-            # Tương thích với các key cũ đã được bot tạo trong bảng keys.
-            # Các key cũ sẽ được chuyển sang hệ thống licenses dùng chung.
             await conn.execute("""
                 INSERT INTO licenses (license_key, app_code, active, duration_days, owner_user_id, created_at)
                 SELECT k.key_code, 'NVC_TTC_FACEBOOK_MANAGER', NOT COALESCE(k.is_used, FALSE), k.duration_days, k.used_by::bigint, k.created_at
@@ -180,7 +234,7 @@ def get_category_info_by_filename(filename):
         return ("cat_bm", "Clone New đã qua BM", 2500, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     elif "NEWZIN" in fname:
         return ("cat_new_zin", "Clone 6159 - ON2FA -  NAME NGOẠI IP VIỆT - NEW ZIN ALL(Nên mua ít test kỹ trước khi mua SLL)", 1500, "UID | Pass | 2FA | Cookie | Token |MAIL ẢO")    
-    elif "PAGE" in fname or "KEPPAGE" in fname: # <-- THÊM ĐOẠN NÀY ĐỂ NHẬN DIỆN TÀI KHOẢN KẸP PAGE
+    elif "PAGE" in fname or "KEPPAGE" in fname:
         return ("cat_acc_kep_page", "CLONE KẸP PAGE NAME VIỆT RANDOM 5-10 - ON2FA - AVT-BÌA (RANDOM) ", 6000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")    
     elif "TRUST" in fname or "2FA" in fname:
         return ("cat_fb_2fa_trust", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA, NO AVT - HOTMAIL TRUST ", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail")   
@@ -218,7 +272,6 @@ async def cmd_start(message: types.Message):
         f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
         f"🛡️ Chính sách & Lưu ý:\n"
         f"• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
-        f"• Bắt buộc: Quay video từ lúc mua đến lúc login để được hỗ trợ.\n\n"
         f"Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard
     )
@@ -301,10 +354,6 @@ async def deposit_callback(call: CallbackQuery):
 
     await call.answer()
 
-def urllib_quote(text):
-    import urllib.parse
-    return urllib.parse.quote(text)
-
 # ==================== TÍNH NĂNG MUA KEY TOOL ====================
 @dp.callback_query(lambda c: c.data == "buy_key_menu")
 async def buy_key_menu_callback(call: CallbackQuery):
@@ -320,15 +369,14 @@ async def buy_key_menu_callback(call: CallbackQuery):
         f"• Lưu ý: Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
         f"• Chọn gói thời gian bạn muốn mua bên dưới:",
         reply_markup=keyboard,
-       
     )
     await call.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("buykey_"))
 async def process_buy_key(call: CallbackQuery):
     days = int(call.data.replace("buykey_", ""))
-    price = days * 1000  # 1k 1 ngày 1 key
-    user_id = int(call.from_user.id) # 👈 Ép kiểu rõ ràng sang int ở đây
+    price = days * 1000 
+    user_id = int(call.from_user.id)
 
     balance = await get_user_balance(user_id)
     if balance < price:
@@ -342,7 +390,7 @@ async def process_buy_key(call: CallbackQuery):
             await conn.execute(
                 '''INSERT INTO licenses
                    (license_key, app_code, active, duration_days, owner_user_id)
-                   VALUES ($1, $2, TRUE, $3, $4::bigint)''', # 👈 Thêm ép kiểu ::bigint ở tham số thứ 4 phòng hờ
+                   VALUES ($1, $2, TRUE, $3, $4::bigint)''',
                 new_key, LICENSE_APP_CODE, days, user_id
             )
 
@@ -363,7 +411,6 @@ async def process_buy_key(call: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data.startswith("buy_menu"))
 async def buy_menu_callback(call: CallbackQuery):
-    # Hỗ trợ phân trang: data có dạng "buy_menu_0", "buy_menu_1", ...
     data_parts = call.data.split("_")
     page = int(data_parts[2]) if len(data_parts) > 2 else 0
     
@@ -376,12 +423,10 @@ async def buy_menu_callback(call: CallbackQuery):
         details_text += "⚠️ *Shop chưa cập nhật sản phẩm*"
         keyboard_buttons.append([InlineKeyboardButton(text="⚠️ Shop chưa cập nhật sản phẩm", callback_data="back_start")])
     else:
-        # Cấu hình số lượng sản phẩm hiển thị trên 1 trang (ví dụ: 5 sản phẩm/trang)
         ITEMS_PER_PAGE = 5
         total_items = len(categories)
         total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
         
-        # Đảm bảo page nằm trong giới hạn hợp lệ
         if page >= total_pages:
             page = total_pages - 1
         if page < 0:
@@ -401,7 +446,6 @@ async def buy_menu_callback(call: CallbackQuery):
             btn_text = f"{i}. {short_name} ({price:,}đ)"
             keyboard_buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"buy_{cat_code}")])
         
-        # Tạo hàng nút phân trang nếu tổng số trang lớn hơn 1
         pagination_buttons = []
         if page > 0:
             pagination_buttons.append(InlineKeyboardButton(text="◀️ Trang trước", callback_data=f"buy_menu_{page - 1}"))
@@ -422,7 +466,7 @@ async def buy_menu_callback(call: CallbackQuery):
     try:
         await call.message.edit_text(details_text, reply_markup=keyboard, parse_mode="Markdown")
     except Exception:
-        pass # Tránh lỗi khi nội dung không thay đổi
+        pass
     await call.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("buy_"))
@@ -506,39 +550,67 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
         await state.clear()
         return
 
+    # Trừ tiền tạm thời trước khi rút
     await update_balance(user_id, -total_price)
+    
+    # Rút acc từ database
     accounts = await buy_multiple_accounts_from_stock(cat_code, quantity)
+    
+    # 🔍 THÔNG BÁO TIẾN HÀNH CHECK LIVE UID BẰNG HÀM CHECK LIVE ĐÃ TÍCH HỢP
+    status_msg = await message_target.answer("🔄 **Đang kiểm tra trực tiếp trạng thái Live UID trước khi bàn giao...**", parse_mode="Markdown")
+    
+    loop = asyncio.get_running_loop()
+    live_accounts, die_accounts = await loop.run_in_executor(None, filter_live_accounts, accounts, 10)
+    
+    live_qty = len(live_accounts)
+    die_qty = len(die_accounts)
+    
+    # Trường hợp nếu tất cả acc rút ra đều hỏng
+    if live_qty == 0:
+        await update_balance(user_id, total_price) # Hoàn lại tiền 100%
+        await status_msg.edit_text("❌ Tất cả tài khoản trong đợt rút này bị lỗi/DIE! Bot đã hoàn lại 100% tiền cho bạn.")
+        await state.clear()
+        return
+
+    # Nếu có nick die, tính toán số tiền hoàn lại cho nick hỏng
+    refund_amount = die_qty * price
+    actual_spent = live_qty * price
+    if refund_amount > 0:
+        await update_balance(user_id, refund_amount)
+
     new_balance = await get_user_balance(user_id)
 
-    file_content = "\n".join(accounts)
+    file_content = "\n".join(live_accounts)
     file_bytes = file_content.encode('utf-8')
-    txt_file = BufferedInputFile(file_bytes, filename=f"Accounts_{quantity}pcs.txt")
+    txt_file = BufferedInputFile(file_bytes, filename=f"Accounts_LIVE_{live_qty}pcs.txt")
+
+    refund_text = f"\n💸 *Đã hoàn lại:* `{refund_amount:,} VNĐ` (do có {die_qty} nick DIE)" if refund_amount > 0 else ""
 
     success_text = (
         f"✅ **Giao dịch thành công!**\n"
         f"📦 Loại: `{cat_name}`\n"
-        f"🔢 Số lượng: `{quantity}` con\n"
-        f"💵 Tổng tiền: `{total_price:,} VNĐ`\n"
+        f"🔢 Số lượng Live thực nhận: `{live_qty}` con\n"
+        f"💵 Thực thanh toán: `{actual_spent:,} VNĐ`{refund_text}\n"
         f"💰 Số dư ví còn lại: `{new_balance:,} VNĐ`\n\n"
         f"📞 *Hỗ trợ liên hệ Telegram:* `{SUPPORT_TELEGRAM}`\n\n"
-        f"📄 *Danh sách tài khoản của bạn đã được đính kèm ở file bên dưới:*"
+        f"📄 *Danh sách tài khoản LIVE đã được đính kèm ở file bên dưới:*"
     )
     
+    await status_msg.delete()
     await message_target.answer(success_text, parse_mode="Markdown")
     await message_target.answer_document(document=txt_file)
-   # ==================== GỬI THÔNG BÁO CHO ADMIN ====================
+
+    # ==================== GỬI THÔNG BÁO CHO ADMIN ====================
     try:
         user_name = "Không rõ"
         username_str = "Không có"
         
-        # Lấy thông tin user chuẩn xác trực tiếp từ Telegram API dựa vào user_id của người mua
         try:
             chat_member = await bot.get_chat(user_id)
             user_name = chat_member.full_name or "Không rõ"
             if chat_member.username:
                 username_str = f"@{chat_member.username}"
         except Exception:
-            # Fallback nếu không gọi được API get_chat
             if hasattr(message_target, 'from_user') and message_target.from_user and not message_target.from_user.is_bot:
                 user_name = message_target.from_user.full_name or "Không rõ"
                 if message_target.from_user.username:
@@ -551,14 +623,13 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
             f"🏷️ Username: {username_str}\n"
             f"🆔 ID: {user_id}\n\n"
             f"📦 Sản phẩm: {cat_name}\n"
-            f"🔢 Số lượng: {quantity}\n"
-            f"💵 Tổng tiền: {total_price:,} VNĐ\n"
+            f"🔢 Số lượng giao LIVE: {live_qty}/{quantity}\n"
+            f"💵 Tổng tiền nhận: {actual_spent:,} VNĐ\n"
             f"⏱️ Thời gian: {vn_time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
         await bot.send_message(ADMIN_ID, admin_notification)
     except Exception as e:
         logging.error(f"Không thể gửi thông báo mua hàng cho Admin: {e}")
-    # ===============================================================
 
     await state.clear()
 
@@ -576,7 +647,6 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
         await message.reply("⚠️ Vui lòng gửi file có định dạng `.txt`!", parse_mode="Markdown")
         return
 
-    # Lấy thông tin phân loại mặc định từ tên file
     cat_code, default_cat_name, default_price, default_format_desc = get_category_info_by_filename(file_name)
 
     file_info = await bot.get_file(document.file_id)
@@ -589,21 +659,17 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     added_count = 0
 
     async with db_pool.acquire() as conn:
-        # Kiểm tra xem danh mục này đã tồn tại trong database hay chưa
         existing_cat = await conn.fetchrow('SELECT cat_name, price, format_desc FROM categories WHERE cat_code = $1', cat_code)
         
         if not existing_cat:
-            # Nếu chưa có, tạo mới hoàn toàn với giá và thông tin mặc định
             await conn.execute(
                 'INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES ($1, $2, $3, $4)', 
                 cat_code, default_cat_name, default_price, default_format_desc
             )
             current_cat_name = default_cat_name
         else:
-            # Nếu đã có rồi, GIỮ NGUYÊN GIÁ CŨ và thông tin cũ, không ghi đè
             current_cat_name = existing_cat['cat_name']
 
-        # Thêm các tài khoản vào kho stock
         for line in lines:
             line = line.strip()
             if line:
@@ -655,67 +721,35 @@ async def sepay_webhook_handler(request):
 
         sepay_id = data.get("id") or data.get("transactionId")
         transfer_type = data.get("transferType") or data.get("type")
-        
-        raw_amount = data.get("transferAmount") or data.get("amount") or 0
-        try:
-            transfer_amount = int(float(raw_amount))
-        except (ValueError, TypeError):
-            transfer_amount = 0
+        content = data.get("code") or data.get("content") or ""
+        amount = int(data.get("transferAmount") or data.get("amount") or 0)
 
-        content = data.get("content") or data.get("description") or ""
+        if transfer_type and transfer_type.lower() != "in":
+            return web.json_response({"success": True, "message": "Ignored outgoing transfer"})
 
-        if transfer_type and str(transfer_type).lower() != "in":
-            return web.json_response({"success": True})
-
-        if not sepay_id:
-            return web.json_response({"success": False, "error": "Missing transaction id"}, status=400)
-
-        async with db_pool.acquire() as conn:
-            exists = await conn.fetchval('SELECT sepay_id FROM transactions WHERE sepay_id = $1', int(sepay_id))
-            if exists:
-                return web.json_response({"success": True})
-
-            # 🔥 NẾU DƯỚI 10K THÌ LƯU LẠI GIAO DỊCH NHƯNG GIỮ LUÔN TIỀN (KHÔNG CỘNG VÍ)
-            if transfer_amount < 10000:
-                await conn.execute(
-                    'INSERT INTO transactions (sepay_id, user_id, amount) VALUES ($1, $2, $3)', 
-                    int(sepay_id), 0, transfer_amount
+        match = re.search(r'NAP\s*(\d+)', content, re.IGNORECASE)
+        if match and amount > 0:
+            user_id = int(match.group(1))
+            async with db_pool.acquire() as conn:
+                inserted = await conn.fetchval(
+                    'INSERT INTO transactions (sepay_id, user_id, amount) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING sepay_id',
+                    sepay_id, user_id, amount
                 )
-                logging.info(f"Khách chuyển dưới 10k ({transfer_amount}đ), bot đã nuốt tiền và không cộng ví.")
-                return web.json_response({"success": True})
-
-            match = re.search(r'NAP\D*(\d+)', str(content), re.IGNORECASE)
-            if match:
-                target_user_id = int(match.group(1))
-                
-                user_check = await conn.fetchrow('SELECT balance FROM users WHERE user_id = $1', target_user_id)
-                if not user_check:
-                    await conn.execute('INSERT INTO users (user_id, balance) VALUES ($1, 0)', target_user_id)
-                
-                await conn.execute('UPDATE users SET balance = balance + $1 WHERE user_id = $2', transfer_amount, target_user_id)
-                await conn.execute('INSERT INTO transactions (sepay_id, user_id, amount) VALUES ($1, $2, $3)', int(sepay_id), target_user_id, transfer_amount)
-                
-                new_bal = await conn.fetchval('SELECT balance FROM users WHERE user_id = $1', target_user_id)
-                
-                try:
+                if inserted:
+                    await update_balance(user_id, amount)
+                    new_bal = await get_user_balance(user_id)
                     await bot.send_message(
-                        target_user_id,
+                        user_id,
                         f"🎉 **NẠP TIỀN THÀNH CÔNG!**\n\n"
-                        f"💵 Nhận: `+{transfer_amount:,} VNĐ`\n"
-                        f"💰 Số dư ví: `{new_bal:,} VNĐ`",
+                        f"💰 Số tiền: `+{amount:,} VNĐ`\n"
+                        f"💵 Số dư mới: `{new_bal:,} VNĐ`\n"
+                        f"🆔 Mã GD SePay: `{sepay_id}`",
                         parse_mode="Markdown"
                     )
-                except Exception as e:
-                    logging.error(f"Lỗi gửi tin nhắn Telegram cho user {target_user_id}: {e}")
-            else:
-                logging.warning(f"Không tìm thấy cú pháp NAP trong nội dung: '{content}'")
-
         return web.json_response({"success": True})
-
     except Exception as e:
-        logging.error(f"LỖI NGHIÊM TRỌNG TRONG WEBHOOK SEPAY: {str(e)}", exc_info=True)
+        logging.error(f"Lỗi xử lý SePay Webhook: {e}")
         return web.json_response({"success": False, "error": str(e)}, status=500)
-
 async def scheduled_notification_task():
     interval = 10 * 3600  
     await asyncio.sleep(10)
@@ -784,4 +818,4 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    asyncio.run(main())    
