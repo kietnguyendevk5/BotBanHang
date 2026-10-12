@@ -38,22 +38,25 @@ BOT_TELE = "@ToolTtc_bot"
 LICENSE_APP_CODE = os.getenv("LICENSE_APP_CODE", "NVC_TTC_FACEBOOK_MANAGER")
 
 # ==================== CẤU HÌNH PAGE CREATOR ====================
-PAGE_CREATE_UNIT_PRICE     = 300      # VNĐ / page THÀNH CÔNG (page lỗi miễn phí)
-PAGE_CREATE_MAX_TOKENS     = 200      # Giới hạn token / lần
-PAGE_CREATE_THREADS        = 20       # Số luồng chạy song song
+PAGE_CREATE_UNIT_PRICE     = 300
+PAGE_CREATE_MAX_TOKENS     = 200
+PAGE_CREATE_THREADS        = 20
 
-# ─── Cấu hình nghỉ MẶC ĐỊNH ───
-PAGE_CREATE_DELAY_SUCCESS  = 300      # 5 phút (mặc định) — nghỉ sau page OK
-PAGE_CREATE_DELAY_FAIL     = 60       # 1 phút (mặc định) — nghỉ sau page fail
-PAGE_CREATE_MAX_PER_TOKEN  = 15       # Max page / token (hard limit)
+# ─── Cấu hình nghỉ mặc định ───
+PAGE_CREATE_DELAY_SUCCESS  = 300
+PAGE_CREATE_DELAY_FAIL     = 60
+PAGE_CREATE_MAX_PER_TOKEN  = 15
 
-# ─── Giới hạn khi user tùy chỉnh ───
-DELAY_OK_MIN   = 30      # Tối thiểu 30s nghỉ sau page OK
-DELAY_OK_MAX   = 1800    # Tối đa 30 phút
-DELAY_FAIL_MIN = 10      # Tối thiểu 10s nghỉ sau page fail
-DELAY_FAIL_MAX = 600     # Tối đa 10 phút
+# ─── Giới hạn custom ───
+DELAY_OK_MIN   = 30
+DELAY_OK_MAX   = 1800
+DELAY_FAIL_MIN = 10
+DELAY_FAIL_MAX = 600
 
-# Headers kiểm tra Live UID
+# ─── Ưu đãi user mới ───
+FREE_PAGES_FOR_NEW_USER = 10   # 10 page OK đầu tiên miễn phí
+
+# Headers check live
 CHECK_HEADERS = {
     'accept': '*/*',
     'accept-language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -79,6 +82,9 @@ class PageCreateState(StatesGroup):
     waiting_for_delay_choice = State()
     waiting_for_delay_ok     = State()
     waiting_for_delay_fail   = State()
+
+class AdminFreeState(StatesGroup):
+    waiting_for_reset_user = State()
 
 # ==================== HÀM CHECK LIVE & LỌC TRÙNG UID FB ====================
 def check_single_uid(account_info):
@@ -145,9 +151,12 @@ async def init_db():
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
-                    balance BIGINT DEFAULT 0
+                    balance BIGINT DEFAULT 0,
+                    free_pages_used INT DEFAULT 0
                 )
             ''')
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS free_pages_used INT DEFAULT 0")
+
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS categories (
                     cat_code TEXT PRIMARY KEY,
@@ -210,13 +219,16 @@ async def init_db():
                     delay_fail INT DEFAULT 60,
                     ok_count INT DEFAULT 0,
                     fail_count INT DEFAULT 0,
+                    free_used INT DEFAULT 0,
+                    paid_count INT DEFAULT 0,
                     cost BIGINT DEFAULT 0,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             ''')
-            # Migration nếu bảng cũ chưa có cột
             await conn.execute("ALTER TABLE page_jobs ADD COLUMN IF NOT EXISTS delay_ok INT DEFAULT 300")
             await conn.execute("ALTER TABLE page_jobs ADD COLUMN IF NOT EXISTS delay_fail INT DEFAULT 60")
+            await conn.execute("ALTER TABLE page_jobs ADD COLUMN IF NOT EXISTS free_used INT DEFAULT 0")
+            await conn.execute("ALTER TABLE page_jobs ADD COLUMN IF NOT EXISTS paid_count INT DEFAULT 0")
 
             await conn.execute("""
                 INSERT INTO licenses (license_key, app_code, active, duration_days, owner_user_id, created_at)
@@ -237,13 +249,32 @@ async def get_user_balance(user_id):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow('SELECT balance FROM users WHERE user_id = $1', user_id)
         if not row:
-            await conn.execute('INSERT INTO users (user_id, balance) VALUES ($1, 0)', user_id)
+            await conn.execute('INSERT INTO users (user_id, balance, free_pages_used) VALUES ($1, 0, 0)', user_id)
             return 0
         return row['balance']
 
 async def update_balance(user_id, amount):
     async with db_pool.acquire() as conn:
         await conn.execute('UPDATE users SET balance = balance + $1 WHERE user_id = $2', amount, user_id)
+
+async def get_user_free_pages_used(user_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow('SELECT free_pages_used FROM users WHERE user_id = $1', user_id)
+        if not row:
+            await conn.execute('INSERT INTO users (user_id, balance, free_pages_used) VALUES ($1, 0, 0)', user_id)
+            return 0
+        return row['free_pages_used'] or 0
+
+async def add_user_free_pages_used(user_id, count):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            'UPDATE users SET free_pages_used = COALESCE(free_pages_used, 0) + $1 WHERE user_id = $2',
+            count, user_id
+        )
+
+async def reset_user_free_pages(user_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute('UPDATE users SET free_pages_used = 0 WHERE user_id = $1', user_id)
 
 async def get_all_categories():
     async with db_pool.acquire() as conn:
@@ -265,14 +296,17 @@ async def buy_multiple_accounts_from_stock(cat_code, quantity):
         await conn.execute('DELETE FROM stock WHERE id = ANY($1::int[])', acc_ids)
         return acc_infos
 
-async def save_page_job(user_id, total_tokens, max_per_token, name_style, delay_ok, delay_fail, ok_count, fail_count, cost):
+async def save_page_job(user_id, total_tokens, max_per_token, name_style, delay_ok, delay_fail,
+                        ok_count, fail_count, free_used, paid_count, cost):
     try:
         async with db_pool.acquire() as conn:
             await conn.execute(
                 '''INSERT INTO page_jobs
-                   (user_id, total_tokens, max_per_token, name_style, delay_ok, delay_fail, ok_count, fail_count, cost)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)''',
-                user_id, total_tokens, max_per_token, name_style, delay_ok, delay_fail, ok_count, fail_count, cost
+                   (user_id, total_tokens, max_per_token, name_style, delay_ok, delay_fail,
+                    ok_count, fail_count, free_used, paid_count, cost)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)''',
+                user_id, total_tokens, max_per_token, name_style, delay_ok, delay_fail,
+                ok_count, fail_count, free_used, paid_count, cost
             )
     except Exception as e:
         logging.error(f"Lỗi lưu page_job: {e}")
@@ -549,7 +583,6 @@ async def _run_page_creation_job(bot_inst, chat_id, tokens, max_per_token, name_
                     counter["fail"] += 1
                 counter["done"] += 1
 
-            # ─── NGHỈ SAU MỖI PAGE (nếu còn page để tạo) ───
             if p < max_per_token:
                 if r.get("success"):
                     delay = delay_ok
@@ -557,8 +590,7 @@ async def _run_page_creation_job(bot_inst, chat_id, tokens, max_per_token, name_
                 else:
                     delay = delay_fail
                     tag = "thất bại"
-
-                logging.info(f"[Token {uid}] Page #{p} {tag} → nghỉ {delay}s trước page tiếp theo")
+                logging.info(f"[Token {uid}] Page #{p} {tag} → nghỉ {delay}s")
                 time.sleep(delay)
 
     sem = asyncio.Semaphore(PAGE_CREATE_THREADS)
@@ -614,13 +646,28 @@ async def _page_creation_task_wrapper(msg_target, user_id, tokens, max_pages, st
 
     ok_count   = counter["ok"]
     fail_count = counter["fail"]
-    total_cost = ok_count * PAGE_CREATE_UNIT_PRICE
+
+    # ─── TÍNH FREE VS PAID ───
+    free_used_before = await get_user_free_pages_used(user_id)
+    free_remaining   = max(0, FREE_PAGES_FOR_NEW_USER - free_used_before)
+
+    free_used_this_job = min(ok_count, free_remaining)
+    paid_count         = max(0, ok_count - free_remaining)
+    total_cost         = paid_count * PAGE_CREATE_UNIT_PRICE
+
+    if free_used_this_job > 0:
+        await add_user_free_pages_used(user_id, free_used_this_job)
 
     if total_cost > 0:
         await update_balance(user_id, -total_cost)
     new_balance = await get_user_balance(user_id)
 
-    await save_page_job(user_id, len(tokens), max_pages, style, delay_ok, delay_fail, ok_count, fail_count, total_cost)
+    free_remaining_after = max(0, FREE_PAGES_FOR_NEW_USER - (free_used_before + free_used_this_job))
+
+    await save_page_job(
+        user_id, len(tokens), max_pages, style, delay_ok, delay_fail,
+        ok_count, fail_count, free_used_this_job, paid_count, total_cost
+    )
 
     lines = []
     for r in results:
@@ -629,12 +676,23 @@ async def _page_creation_task_wrapper(msg_target, user_id, tokens, max_pages, st
     file_bytes = ("\n".join(lines) if lines else "Không có page nào tạo thành công").encode("utf-8")
     file_out = BufferedInputFile(file_bytes, filename=f"pages_{user_id}_{ok_count}ok.txt")
 
+    if free_used_this_job > 0:
+        free_note = (
+            f"🎁 **Page miễn phí (ưu đãi user mới):**\n"
+            f"• Dùng lần này: `{free_used_this_job}`\n"
+            f"• Còn lại sau job: `{free_remaining_after}/{FREE_PAGES_FOR_NEW_USER}`\n\n"
+        )
+    else:
+        free_note = (
+            f"🎁 **Page miễn phí:** đã hết quota ({FREE_PAGES_FOR_NEW_USER}/{FREE_PAGES_FOR_NEW_USER})\n\n"
+        )
+
     summary = (
         f"🎉 **HOÀN TẤT TẠO PAGE**\n\n"
         f"• ✅ Thành công: `{ok_count}` page\n"
-        f"• ❌ Thất bại: `{fail_count}` page\n"
-        f"• 💰 Đã trừ: `{total_cost:,} VNĐ` (`{PAGE_CREATE_UNIT_PRICE:,}đ` × `{ok_count}`)\n"
-        f"• 🎁 Page lỗi: **miễn phí**\n"
+        f"• ❌ Thất bại: `{fail_count}` page\n\n"
+        f"{free_note}"
+        f"• 💰 Đã trừ: `{total_cost:,} VNĐ` ({paid_count} page × {PAGE_CREATE_UNIT_PRICE:,}đ)\n"
         f"• 💳 Số dư còn lại: `{new_balance:,} VNĐ`\n\n"
         f"📄 File kết quả (`UID|Page Name|Page ID`):"
     )
@@ -649,6 +707,19 @@ async def _page_creation_task_wrapper(msg_target, user_id, tokens, max_pages, st
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     await get_user_balance(user_id)
+
+    # Banner free
+    free_used = await get_user_free_pages_used(user_id)
+    free_left = max(0, FREE_PAGES_FOR_NEW_USER - free_used)
+
+    if free_left > 0:
+        free_banner = (
+            f"🎁 **ƯU ĐÃI USER MỚI!**\n"
+            f"Bạn đang có **`{free_left}/{FREE_PAGES_FOR_NEW_USER}`** lượt tạo page **MIỄN PHÍ**!\n"
+            f"Bấm 🚀 **Tạo Page FB** để dùng ngay.\n\n"
+        )
+    else:
+        free_banner = ""
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -669,6 +740,7 @@ async def cmd_start(message: types.Message):
         f"🤖 HỆ THỐNG BÁN VIA/CLONE & KEY TOOL TỰ ĐỘNG 24/7\n\n"
         f"👋 Chào mừng bạn đến với shop!\n"
         f"🚀 Chuyên cung cấp tài khoản chất lượng cao, key tool và tạo page tự động.\n\n"
+        f"{free_banner}"
         f"🛡️ Chính sách & Lưu ý:\n"
         f"• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
         f"• Tạo page: `{PAGE_CREATE_UNIT_PRICE:,}đ` / page **THÀNH CÔNG** — page lỗi miễn phí.\n"
@@ -693,6 +765,18 @@ async def support_callback(call: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "back_start")
 async def back_start_callback(call: CallbackQuery):
+    user_id = call.from_user.id
+    free_used = await get_user_free_pages_used(user_id)
+    free_left = max(0, FREE_PAGES_FOR_NEW_USER - free_used)
+
+    if free_left > 0:
+        free_banner = (
+            f"🎁 **ƯU ĐÃI USER MỚI!**\n"
+            f"Bạn đang có **`{free_left}/{FREE_PAGES_FOR_NEW_USER}`** lượt tạo page **MIỄN PHÍ**!\n\n"
+        )
+    else:
+        free_banner = ""
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📦 Mua Tài Khoản", callback_data="buy_menu"),
@@ -711,6 +795,7 @@ async def back_start_callback(call: CallbackQuery):
         f"🤖 HỆ THỐNG BÁN VIA/CLONE & KEY TOOL TỰ ĐỘNG 24/7\n\n"
         f"👋 Chào mừng bạn đến với shop!\n"
         f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
+        f"{free_banner}"
         f"Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard
     )
@@ -720,10 +805,14 @@ async def back_start_callback(call: CallbackQuery):
 async def profile_callback(call: CallbackQuery):
     user_id = call.from_user.id
     balance = await get_user_balance(user_id)
+    free_used = await get_user_free_pages_used(user_id)
+    free_left = max(0, FREE_PAGES_FOR_NEW_USER - free_used)
+
     await call.message.answer(
         f"👤 **Thông tin tài khoản:**\n"
         f"- ID của bạn: `{user_id}`\n"
-        f"- Số dư ví: `{balance:,} VNĐ`",
+        f"- Số dư ví: `{balance:,} VNĐ`\n"
+        f"- 🎁 Page free còn lại: `{free_left}/{FREE_PAGES_FOR_NEW_USER}`",
         parse_mode="Markdown"
     )
     await call.answer()
@@ -1027,25 +1116,38 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
     await state.clear()
 
 # ═══════════════════════════════════════════════════════════════════
-# PAGE CREATOR — HANDLERS
+# PAGE CREATOR HANDLERS
 # ═══════════════════════════════════════════════════════════════════
 @dp.callback_query(lambda c: c.data == "page_create_menu")
 async def page_create_menu(call: CallbackQuery, state: FSMContext):
     user_id = call.from_user.id
     balance = await get_user_balance(user_id)
+    free_used = await get_user_free_pages_used(user_id)
+    free_left = max(0, FREE_PAGES_FOR_NEW_USER - free_used)
+
+    if free_left > 0:
+        free_banner = (
+            f"🎁 **ƯU ĐÃI USER MỚI!**\n"
+            f"• Bạn còn **`{free_left}/{FREE_PAGES_FOR_NEW_USER}`** page miễn phí\n"
+            f"• Page OK đầu tiên sẽ KHÔNG bị trừ tiền (đến hết quota)\n\n"
+        )
+    else:
+        free_banner = f"🎁 Ưu đãi free đã hết ({FREE_PAGES_FOR_NEW_USER}/{FREE_PAGES_FOR_NEW_USER})\n\n"
+
     text = (
         f"🚀 **TẠO PAGE FACEBOOK TỰ ĐỘNG**\n\n"
+        f"{free_banner}"
         f"💰 Giá: `{PAGE_CREATE_UNIT_PRICE:,}đ` / 1 page **THÀNH CÔNG**\n"
-        f"🎁 Page lỗi: **miễn phí** — không trừ tiền\n"
+        f"🎁 Page lỗi: **miễn phí**\n"
         f"💳 Số dư của bạn: `{balance:,} VNĐ`\n\n"
         f"📋 **Hướng dẫn:**\n"
         f"1️⃣ Chuẩn bị file `.txt` chứa danh sách token (mỗi dòng 1 token)\n"
         f"2️⃣ Bấm nút bên dưới và gửi file\n"
         f"3️⃣ Nhập số page tối đa / token (1–{PAGE_CREATE_MAX_PER_TOKEN})\n"
         f"4️⃣ Chọn kiểu tên (VN / US)\n"
-        f"5️⃣ Cấu hình thời gian nghỉ (mặc định hoặc tùy chỉnh)\n"
+        f"5️⃣ Cấu hình thời gian nghỉ\n"
         f"6️⃣ Xác nhận — bot tự chạy\n\n"
-        f"⚠️ *Chỉ tính tiền cho page TẠO THÀNH CÔNG.*"
+        f"⚠️ *Chỉ tính tiền cho page TẠO THÀNH CÔNG (đã trừ quota free).*"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📤 Gửi file tokens.txt", callback_data="page_upload_start")],
@@ -1148,7 +1250,7 @@ async def page_choose_style(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 # ═══════════════════════════════════════════════════════════════════
-# CẤU HÌNH THỜI GIAN NGHỈ — Default / Custom
+# CẤU HÌNH THỜI GIAN NGHỈ
 # ═══════════════════════════════════════════════════════════════════
 @dp.callback_query(lambda c: c.data == "pcs_default_cfg", PageCreateState.waiting_for_delay_choice)
 async def page_default_config(call: CallbackQuery, state: FSMContext):
@@ -1218,8 +1320,7 @@ async def page_receive_delay_fail(message: types.Message, state: FSMContext):
     await _render_confirm(message, state, data, is_callback=False)
 
 async def _render_confirm(msg_target, state: FSMContext, data: dict, is_callback=False):
-    """Vẽ màn hình xác nhận cuối cùng, chờ pcs_confirm."""
-    await state.set_state(PageCreateState.waiting_for_name_style)  # tái dùng state để hứng pcs_confirm
+    await state.set_state(PageCreateState.waiting_for_name_style)
 
     tokens     = data["tokens"]
     max_pages  = data["max_pages"]
@@ -1228,18 +1329,18 @@ async def _render_confirm(msg_target, state: FSMContext, data: dict, is_callback
     delay_fail = data["delay_fail"]
 
     max_total = len(tokens) * max_pages
-    max_price = max_total * PAGE_CREATE_UNIT_PRICE
-
-    # Lấy user_id
-    if is_callback:
-        user_id = msg_target.chat.id
-    else:
-        user_id = msg_target.chat.id
+    user_id = msg_target.chat.id
     balance = await get_user_balance(user_id)
+
+    free_used = await get_user_free_pages_used(user_id)
+    free_left = max(0, FREE_PAGES_FOR_NEW_USER - free_used)
+
+    max_free_usable = min(max_total, free_left)
+    max_paid_pages  = max(0, max_total - free_left)
+    max_price       = max_paid_pages * PAGE_CREATE_UNIT_PRICE
 
     label = "Việt Nam" if style == "vn" else "US"
 
-    # Ước lượng thời gian của 1 token (song song)
     total_delay_seconds = (max_pages - 1) * delay_ok
     if total_delay_seconds < 60:
         time_est = f"~{total_delay_seconds} giây"
@@ -1250,16 +1351,25 @@ async def _render_confirm(msg_target, state: FSMContext, data: dict, is_callback
         m = (total_delay_seconds % 3600) // 60
         time_est = f"~{h} giờ {m} phút"
 
+    if free_left > 0:
+        free_banner = (
+            f"🎁 **Ưu đãi free:** `{free_left}/{FREE_PAGES_FOR_NEW_USER}` page\n"
+            f"   → Lần này tối đa **`{max_free_usable}`** page được MIỄN PHÍ\n"
+            f"   → Vượt quota mới bị trừ tiền\n\n"
+        )
+    else:
+        free_banner = f"🎁 **Ưu đãi free:** đã hết (`{FREE_PAGES_FOR_NEW_USER}/{FREE_PAGES_FOR_NEW_USER}`)\n\n"
+
     text = (
         f"📋 **XÁC NHẬN TẠO PAGE**\n\n"
         f"• Số token: `{len(tokens)}`\n"
         f"• Page tối đa / token: `{max_pages}`\n"
         f"• Tổng page tối đa: `{max_total}`\n"
         f"• Kiểu tên: **{label}**\n"
-        f"• ⏱️ Nghỉ sau OK: `{delay_ok}s` ({delay_ok // 60} phút)\n"
-        f"• ⏱️ Nghỉ sau fail: `{delay_fail}s` ({delay_fail // 60} phút)\n\n"
-        f"💰 Giá: `{PAGE_CREATE_UNIT_PRICE:,}đ/page` (chỉ tính page OK)\n"
-        f"🎁 Page lỗi: **miễn phí**\n"
+        f"• ⏱️ Nghỉ sau OK: `{delay_ok}s`\n"
+        f"• ⏱️ Nghỉ sau fail: `{delay_fail}s`\n\n"
+        f"{free_banner}"
+        f"💰 Giá page vượt quota: `{PAGE_CREATE_UNIT_PRICE:,}đ/page`\n"
         f"💳 Số dư hiện tại: `{balance:,} VNĐ`\n"
         f"🧾 Tối đa có thể trừ: `{max_price:,} VNĐ`\n\n"
         f"⏱️ **Thời gian ước tính:** {time_est}\n"
@@ -1298,12 +1408,22 @@ async def page_confirm_cb(call: CallbackQuery, state: FSMContext):
         await call.answer()
         return
 
-    balance  = await get_user_balance(user_id)
-    max_cost = len(tokens) * max_pages * PAGE_CREATE_UNIT_PRICE
+    balance   = await get_user_balance(user_id)
+    free_used = await get_user_free_pages_used(user_id)
+    free_left = max(0, FREE_PAGES_FOR_NEW_USER - free_used)
+
+    max_total      = len(tokens) * max_pages
+    max_paid_pages = max(0, max_total - free_left)
+    max_cost       = max_paid_pages * PAGE_CREATE_UNIT_PRICE
+
     if balance < max_cost:
         await call.message.edit_text(
-            f"❌ Số dư không đủ!\n"
-            f"Cần tối đa: `{max_cost:,} VNĐ` — Bạn có: `{balance:,} VNĐ`\n"
+            f"❌ Số dư không đủ!\n\n"
+            f"• Tổng page tối đa: `{max_total}`\n"
+            f"• Page free áp dụng: `{min(max_total, free_left)}`\n"
+            f"• Page phải trả: `{max_paid_pages}` × `{PAGE_CREATE_UNIT_PRICE:,}đ`\n"
+            f"• Cần tối đa: `{max_cost:,} VNĐ`\n"
+            f"• Bạn có: `{balance:,} VNĐ`\n\n"
             f"Vui lòng nạp thêm rồi thử lại.",
             parse_mode="Markdown",
         )
@@ -1315,7 +1435,8 @@ async def page_confirm_cb(call: CallbackQuery, state: FSMContext):
         f"• Tokens: `{len(tokens)}`\n"
         f"• Max/token: `{max_pages}`\n"
         f"• Kiểu tên: **{'VN' if style == 'vn' else 'US'}**\n"
-        f"• Nghỉ OK: `{delay_ok}s` | Fail: `{delay_fail}s`\n\n"
+        f"• Nghỉ OK/Fail: `{delay_ok}s / {delay_fail}s`\n"
+        f"• Free còn lại: `{free_left}/{FREE_PAGES_FOR_NEW_USER}`\n\n"
         f"⏳ Bot sẽ báo tiến độ mỗi ~30s.",
         parse_mode="Markdown",
     )
@@ -1325,7 +1446,6 @@ async def page_confirm_cb(call: CallbackQuery, state: FSMContext):
         call.message, user_id, tokens, max_pages, style, delay_ok, delay_fail
     ))
 
-    # Báo admin
     try:
         await bot.send_message(
             ADMIN_ID,
@@ -1334,7 +1454,8 @@ async def page_confirm_cb(call: CallbackQuery, state: FSMContext):
             f"• Tokens: `{len(tokens)}`\n"
             f"• Max/token: `{max_pages}`\n"
             f"• Style: **{'VN' if style == 'vn' else 'US'}**\n"
-            f"• Delay OK/Fail: `{delay_ok}s / {delay_fail}s`",
+            f"• Delay OK/Fail: `{delay_ok}s / {delay_fail}s`\n"
+            f"• Free còn: `{free_left}/{FREE_PAGES_FOR_NEW_USER}`",
             parse_mode="Markdown",
         )
     except Exception:
@@ -1357,7 +1478,76 @@ async def cmd_createpage_admin(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
     await state.set_state(PageCreateState.waiting_for_tokens)
-    await message.reply("👑 **Admin mode** — gửi file tokens.txt (admin vẫn bị trừ tiền theo cấu hình).")
+    await message.reply("👑 **Admin mode** — gửi file tokens.txt.")
+
+# ═══════════════════════════════════════════════════════════════════
+# ADMIN: /resetfree
+# ═══════════════════════════════════════════════════════════════════
+@dp.message(Command("resetfree"))
+async def cmd_resetfree(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply(
+            "⚠️ **Sai cú pháp!**\n\n"
+            "**Cách dùng:**\n"
+            "• `/resetfree [user_id]` — Reset 1 user\n"
+            "• `/resetfree all` — Reset TẤT CẢ users\n\n"
+            "VD: `/resetfree 7718090377`",
+            parse_mode="Markdown"
+        )
+        return
+
+    target = args[1].strip().lower()
+
+    if target == "all":
+        try:
+            async with db_pool.acquire() as conn:
+                result = await conn.execute('UPDATE users SET free_pages_used = 0')
+            # result dạng "UPDATE N"
+            count = result.split()[-1] if result else "?"
+            await message.reply(
+                f"✅ **Đã reset quota free cho TẤT CẢ users!**\n"
+                f"• Số user được reset: `{count}`\n"
+                f"• Mỗi user có lại `{FREE_PAGES_FOR_NEW_USER}` page miễn phí.",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            await message.reply(f"❌ Lỗi: {e}")
+        return
+
+    if not target.isdigit():
+        await message.reply("⚠️ User ID phải là số hoặc `all`.")
+        return
+
+    target_user_id = int(target)
+
+    try:
+        await get_user_balance(target_user_id)  # đảm bảo user tồn tại
+        await reset_user_free_pages(target_user_id)
+
+        await message.reply(
+            f"✅ **Đã reset quota free!**\n"
+            f"• User: `{target_user_id}`\n"
+            f"• Quota mới: `{FREE_PAGES_FOR_NEW_USER}` page miễn phí.",
+            parse_mode="Markdown"
+        )
+
+        # Thông báo cho user
+        try:
+            await bot.send_message(
+                target_user_id,
+                f"🎁 **ADMIN ĐÃ RESET QUOTA FREE CHO BẠN!**\n\n"
+                f"• Bạn được cấp lại `{FREE_PAGES_FOR_NEW_USER}` page miễn phí.\n"
+                f"• Bấm 🚀 **Tạo Page FB** để sử dụng ngay!",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        await message.reply(f"❌ Lỗi reset: {e}")
 
 # ==================== UPLOAD FILE (ADMIN) ====================
 @dp.message(lambda message: message.document is not None, StateFilter(None))
@@ -1407,7 +1597,7 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
         f"📥 **Đã nhập kho thành công!**\n"
         f"- Tên file: `{file_name}`\n"
         f"- Phân loại vào: **{current_cat_name[:30]}...**\n"
-        f"- Đã thêm: **{added_count}** tài khoản mới vào kho (giữ nguyên giá cũ nếu danh mục đã tồn tại).",
+        f"- Đã thêm: **{added_count}** tài khoản mới vào kho.",
         parse_mode="Markdown"
     )
 
