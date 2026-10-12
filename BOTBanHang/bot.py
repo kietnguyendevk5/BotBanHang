@@ -1,3 +1,4 @@
+import json
 import logging
 import asyncio
 import re
@@ -7,10 +8,12 @@ import requests
 import asyncpg
 import random
 import string
+import uuid as _uuid
+import threading
 import aiohttp
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command, StateFilter
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -20,19 +23,35 @@ from zoneinfo import ZoneInfo
 from urllib.parse import quote as urllib_quote
 
 # ==================== CẤU HÌNH NGÂN HÀNG & BOT ====================
-API_TOKEN = '8817044998:AAEe0u1KgQF2-xXwCJ5aABdDu5hFx8w3LsQ' 
-ADMIN_ID = 7718090377         
-BANK_ID = "MB"                
-BANK_ACCOUNT = "0356442864"       
-ACCOUNT_NAME = "NGUYEN DIEN TUAN KIET" 
-SUPPORT_TELEGRAM = "@kietnguyen0999" 
-SUPPORT_ZALO = "0356442864"        
+API_TOKEN = '8817044998:AAEe0u1KgQF2-xXwCJ5aABdDu5hFx8w3LsQ'
+ADMIN_ID = 7718090377
+BANK_ID = "MB"
+BANK_ACCOUNT = "0356442864"
+ACCOUNT_NAME = "NGUYEN DIEN TUAN KIET"
+SUPPORT_TELEGRAM = "@kietnguyen0999"
+SUPPORT_ZALO = "0356442864"
 WEBHOOK_HOST = '0.0.0.0'
 SEPAY_API_KEY = os.getenv("SEPAY_API_KEY", "spsk_test_zFCU1AguPj8T7RqzMAMRxSbgaspYi99y")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:fVXjKs8XvC9lljvT@db.xfyfbpqyelrzfsgwhgbc.supabase.co:5432/postgres")
-SELF_URL = "https://botbanhang-s6iq.onrender.com/" 
+SELF_URL = "https://botbanhang-s6iq.onrender.com/"
 BOT_TELE = "@ToolTtc_bot"
 LICENSE_APP_CODE = os.getenv("LICENSE_APP_CODE", "NVC_TTC_FACEBOOK_MANAGER")
+
+# ==================== CẤU HÌNH PAGE CREATOR ====================
+PAGE_CREATE_UNIT_PRICE     = 300      # VNĐ / page THÀNH CÔNG (page lỗi miễn phí)
+PAGE_CREATE_MAX_TOKENS     = 200      # Giới hạn token / lần
+PAGE_CREATE_THREADS        = 20       # Số luồng chạy song song
+
+# ─── Cấu hình nghỉ MẶC ĐỊNH ───
+PAGE_CREATE_DELAY_SUCCESS  = 300      # 5 phút (mặc định) — nghỉ sau page OK
+PAGE_CREATE_DELAY_FAIL     = 60       # 1 phút (mặc định) — nghỉ sau page fail
+PAGE_CREATE_MAX_PER_TOKEN  = 15       # Max page / token (hard limit)
+
+# ─── Giới hạn khi user tùy chỉnh ───
+DELAY_OK_MIN   = 30      # Tối thiểu 30s nghỉ sau page OK
+DELAY_OK_MAX   = 1800    # Tối đa 30 phút
+DELAY_FAIL_MIN = 10      # Tối thiểu 10s nghỉ sau page fail
+DELAY_FAIL_MAX = 600     # Tối đa 10 phút
 
 # Headers kiểm tra Live UID
 CHECK_HEADERS = {
@@ -43,27 +62,29 @@ CHECK_HEADERS = {
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
 }
 
-# 🟢 KHỞI TẠO CÁC BIẾN BAN ĐẦU
+# 🟢 KHỞI TẠO
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
-
-# Biến toàn cục chứa kết nối pool database
 db_pool = None
 
-# Định nghĩa trạng thái FSM
+# ==================== FSM STATES ====================
 class BuyState(StatesGroup):
     waiting_for_quantity = State()
 
+class PageCreateState(StatesGroup):
+    waiting_for_tokens       = State()
+    waiting_for_max_pages    = State()
+    waiting_for_name_style   = State()
+    waiting_for_delay_choice = State()
+    waiting_for_delay_ok     = State()
+    waiting_for_delay_fail   = State()
+
 # ==================== HÀM CHECK LIVE & LỌC TRÙNG UID FB ====================
 def check_single_uid(account_info):
-    """
-    Tách UID từ dòng account_info và kiểm tra xem có LIVE hay không.
-    """
     raw_info = account_info.strip()
     if not raw_info:
         return raw_info, False, "Empty line"
-        
     uid = raw_info.split('|')[0].strip()
     params = {'redirect': 'false'}
     try:
@@ -86,16 +107,10 @@ def check_single_uid(account_info):
         return raw_info, False, str(e)
 
 def filter_live_accounts(accounts, max_workers=10):
-    """
-    1. Lọc trùng UID trong danh sách đầu vào.
-    2. Chạy đa luồng kiểm tra danh sách tài khoản duy nhất.
-    Trả về danh sách (LIVE, DIE_HOAC_TRUNG).
-    """
     unique_accounts = []
     seen_uids = set()
     duplicate_accs = []
 
-    # 🔹 BƯỚC 1: LỌC TRÙNG ID (UID)
     for acc in accounts:
         acc_str = acc.strip()
         if not acc_str:
@@ -107,9 +122,8 @@ def filter_live_accounts(accounts, max_workers=10):
             seen_uids.add(uid)
             unique_accounts.append(acc_str)
 
-    # 🔹 BƯỚC 2: CHECK LIVE ĐA LUỒNG CHO DANH SÁCH KHÔNG TRÙNG
     live_accs = []
-    die_accs = duplicate_accs  # Tính luôn trùng UID vào danh sách không bàn giao
+    die_accs = duplicate_accs
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_acc = {executor.submit(check_single_uid, acc): acc for acc in unique_accounts}
@@ -119,10 +133,10 @@ def filter_live_accounts(accounts, max_workers=10):
                 live_accs.append(acc_info)
             else:
                 die_accs.append(acc_info)
-                
+
     return live_accs, die_accs
 
-# ==================== KHỞI TẠO DATABASE POSTGRESQL ====================
+# ==================== KHỞI TẠO DATABASE ====================
 async def init_db():
     global db_pool
     try:
@@ -167,7 +181,6 @@ async def init_db():
                     expired_at TIMESTAMPTZ
                 )
             ''')
-
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS licenses (
                     license_key TEXT PRIMARY KEY,
@@ -186,11 +199,30 @@ async def init_db():
             await conn.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS owner_user_id BIGINT NULL")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_licenses_machine ON licenses(machine_id)")
 
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS page_jobs (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    total_tokens INT NOT NULL,
+                    max_per_token INT NOT NULL,
+                    name_style TEXT NOT NULL,
+                    delay_ok INT DEFAULT 300,
+                    delay_fail INT DEFAULT 60,
+                    ok_count INT DEFAULT 0,
+                    fail_count INT DEFAULT 0,
+                    cost BIGINT DEFAULT 0,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            ''')
+            # Migration nếu bảng cũ chưa có cột
+            await conn.execute("ALTER TABLE page_jobs ADD COLUMN IF NOT EXISTS delay_ok INT DEFAULT 300")
+            await conn.execute("ALTER TABLE page_jobs ADD COLUMN IF NOT EXISTS delay_fail INT DEFAULT 60")
+
             await conn.execute("""
                 INSERT INTO licenses (license_key, app_code, active, duration_days, owner_user_id, created_at)
                 SELECT k.key_code, 'NVC_TTC_FACEBOOK_MANAGER', NOT COALESCE(k.is_used, FALSE), k.duration_days, k.used_by::bigint, k.created_at
                 FROM keys k
-                WHERE k.used_by IS NOT NULL AND k.used_by != '' 
+                WHERE k.used_by IS NOT NULL AND k.used_by != ''
                 AND NOT EXISTS (
                     SELECT 1 FROM licenses l WHERE l.license_key = k.key_code
                 )
@@ -200,7 +232,7 @@ async def init_db():
         logging.error(f"Lỗi kết nối PostgreSQL: {e}")
         raise e
 
-# --- CÁC HÀM XỬ LÝ DATABASE (ASYNC) ---
+# --- CÁC HÀM XỬ LÝ DATABASE ---
 async def get_user_balance(user_id):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow('SELECT balance FROM users WHERE user_id = $1', user_id)
@@ -228,12 +260,22 @@ async def buy_multiple_accounts_from_stock(cat_code, quantity):
         rows = await conn.fetch('SELECT id, account_info FROM stock WHERE cat_code = $1 LIMIT $2', cat_code, quantity)
         if not rows:
             return []
-        
         acc_ids = [row['id'] for row in rows]
         acc_infos = [row['account_info'] for row in rows]
-        
         await conn.execute('DELETE FROM stock WHERE id = ANY($1::int[])', acc_ids)
         return acc_infos
+
+async def save_page_job(user_id, total_tokens, max_per_token, name_style, delay_ok, delay_fail, ok_count, fail_count, cost):
+    try:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                '''INSERT INTO page_jobs
+                   (user_id, total_tokens, max_per_token, name_style, delay_ok, delay_fail, ok_count, fail_count, cost)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)''',
+                user_id, total_tokens, max_per_token, name_style, delay_ok, delay_fail, ok_count, fail_count, cost
+            )
+    except Exception as e:
+        logging.error(f"Lỗi lưu page_job: {e}")
 
 def generate_key_string():
     chars = string.ascii_uppercase + string.digits
@@ -242,7 +284,7 @@ def generate_key_string():
     part3 = ''.join(random.choices(chars, k=4))
     return f"ACP-{part1}-{part2}-{part3}"
 
-# ==================== HÀM PHÂN LOẠI DỰA TRÊN TÊN FILE ====================
+# ==================== PHÂN LOẠI FILE UPLOAD ====================
 def get_category_info_by_filename(filename):
     fname = filename.upper()
     if "TUT" in fname and "TRAU" in fname:
@@ -252,23 +294,357 @@ def get_category_info_by_filename(filename):
     elif "BM" in fname:
         return ("cat_bm", "Clone New đã qua BM", 2500, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     elif "NEWZIN" in fname:
-        return ("cat_new_zin", "Clone 6159 - ON2FA -  NAME NGOẠI IP VIỆT - NEW ZIN ALL(Nên mua ít test kỹ trước khi mua SLL)", 1500, "UID | Pass | 2FA | Cookie | Token |MAIL ẢO")    
+        return ("cat_new_zin", "Clone 6159 - ON2FA -  NAME NGOẠI IP VIỆT - NEW ZIN ALL(Nên mua ít test kỹ trước khi mua SLL)", 1500, "UID | Pass | 2FA | Cookie | Token |MAIL ẢO")
     elif "PAGE" in fname or "KEPPAGE" in fname:
-        return ("cat_acc_kep_page", "CLONE KẸP PAGE NAME VIỆT RANDOM 5-10 - ON2FA - AVT-BÌA (RANDOM) ", 6000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")    
+        return ("cat_acc_kep_page", "CLONE KẸP PAGE NAME VIỆT RANDOM 5-10 - ON2FA - AVT-BÌA (RANDOM) ", 6000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")
     elif "TRUST" in fname or "2FA" in fname:
-        return ("cat_fb_2fa_trust", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA, NO AVT - HOTMAIL TRUST ", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail")   
+        return ("cat_fb_2fa_trust", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA, NO AVT - HOTMAIL TRUST ", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail")
     elif "HOTMAIL" in fname or "OUTLOOK" in fname:
-        return ("cat_hot_trust", "HOTMAIL-OUTLOOK TRUST 6-12TH CÓ MAILKP ", 350, "MAIL|PASS|RERFESH|CLIENT|MAILKP") 
+        return ("cat_hot_trust", "HOTMAIL-OUTLOOK TRUST 6-12TH CÓ MAILKP ", 350, "MAIL|PASS|RERFESH|CLIENT|MAILKP")
     elif "GMAIL" in fname:
         return ("cat_gmail", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA - NO AVT - VER GMAIL ", 3500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU|MAIL")
     elif "PHONE" in fname:
         return ("cat_phone", "CLONE NEW - NAME VIỆT - ON2FA - AVT - 3 POST - VER PHONE ", 2500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU")
     elif "DIEMAIL" in fname:
-        return ("cat_die_mail", "CLONE NGÂM - NAME VIỆT - ON2FA - AVT ADD 20 -50 BB - VER HOTMAIL - MAIL DIE ", 3500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU(MAIL DIE)")    
+        return ("cat_die_mail", "CLONE NGÂM - NAME VIỆT - ON2FA - AVT ADD 20 -50 BB - VER HOTMAIL - MAIL DIE ", 3500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU(MAIL DIE)")
     else:
         return ("cat_new_zin_ngam", "CLONE NGÂM TRÂU - NAME RANDOM - VER HOTMAIL - LIVE ALL 100%", 2000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
 
-# ==================== CÁC LỆNH CỦA BOT TELEGRAM ====================
+# ═══════════════════════════════════════════════════════════════════
+# FB PAGE CREATOR ENGINE
+# ═══════════════════════════════════════════════════════════════════
+_PAGE_DEVICES = [
+    ("samsung", "SM-X910N",  1080, 1920, 3.0,   "13", "33", "MobiFone",    "45201"),
+    ("samsung", "SM-S918B",  1080, 2340, 3.0,   "14", "34", "Viettel",     "45204"),
+    ("samsung", "SM-A546E",  1080, 2340, 2.75,  "13", "33", "Vinaphone",   "45202"),
+    ("Xiaomi",  "2201123G",  1080, 2400, 2.75,  "13", "33", "Viettel",     "45204"),
+    ("Xiaomi",  "M2101K7AG", 1080, 2400, 2.75,  "12", "31", "MobiFone",    "45201"),
+    ("OPPO",    "CPH2451",   1080, 2412, 3.0,   "14", "34", "Vinaphone",   "45202"),
+    ("vivo",    "V2141",     1080, 2400, 2.75,  "13", "33", "Vietnamobile","45205"),
+    ("Google",  "Pixel 7",   1080, 2400, 2.625, "14", "34", "Viettel",     "45204"),
+    ("Google",  "Pixel 6a",  1080, 2400, 2.625, "13", "33", "MobiFone",    "45201"),
+    ("realme",  "RMX3630",   1080, 2412, 3.0,   "13", "33", "Gmobile",     "45207"),
+]
+_PAGE_FB_VERSIONS = [
+    ("450.0.0.42.110", "563890684"),
+    ("452.0.0.38.111", "570211455"),
+    ("448.0.0.33.120", "559012734"),
+    ("455.0.0.25.100", "581234001"),
+]
+_PAGE_CONN_TYPES = ["WIFI", "WIFI", "WIFI", "MOBILE"]
+
+_PAGE_HO  = ["Nguyễn", "Trần", "Lê", "Phạm", "Hoàng", "Huỳnh", "Phan",
+             "Vũ", "Võ", "Đặng", "Bùi", "Đỗ", "Hồ", "Ngô", "Dương",
+             "Lý", "Đinh", "Trịnh", "Mai", "Tô", "Lương", "Tạ"]
+_PAGE_DEM = ["Văn", "Thị", "Minh", "Hoàng", "Thanh", "Quốc", "Hữu",
+             "Đức", "Ngọc", "Kim", "Bảo", "Gia", "Khánh", "Tuấn",
+             "Anh", "Phương", "Mỹ", "Diệu", "Thùy", "Hồng", ""]
+_PAGE_TEN = ["Long", "Hùng", "An", "Bình", "Cường", "Dũng", "Đạt", "Hải",
+             "Hiếu", "Hòa", "Huy", "Khánh", "Kiên", "Lâm", "Linh", "Mai",
+             "Nam", "Nghĩa", "Nguyên", "Nhân", "Phát", "Phong", "Phúc",
+             "Quân", "Quang", "Sơn", "Tài", "Tâm", "Thắng", "Thành",
+             "Thiện", "Thịnh", "Thuận", "Tiến", "Toàn", "Trí", "Trung",
+             "Tú", "Tuấn", "Tùng", "Vinh", "Vũ", "Yến", "Nhi", "My",
+             "Trang", "Hân", "Thư", "Vy", "Nhung", "Ngân", "Loan",
+             "Hương", "Lan", "Đào", "Quỳnh", "Trâm", "Anh", "Chi"]
+_PAGE_US_FIRST = [
+    "James", "John", "Robert", "Michael", "William", "David", "Richard",
+    "Joseph", "Thomas", "Charles", "Christopher", "Daniel", "Matthew",
+    "Anthony", "Mark", "Paul", "Steven", "Andrew", "Joshua", "Kevin",
+    "Brian", "Edward", "Ryan", "Jacob", "Gary", "Eric", "Stephen",
+    "Scott", "Brandon", "Benjamin", "Samuel", "Gregory", "Frank",
+    "Mary", "Patricia", "Jennifer", "Linda", "Elizabeth", "Barbara",
+    "Susan", "Jessica", "Sarah", "Karen", "Nancy", "Lisa", "Betty",
+    "Margaret", "Sandra", "Ashley", "Kimberly", "Emily", "Michelle",
+    "Amanda", "Melissa", "Rebecca", "Laura", "Amy", "Angela", "Anna",
+]
+_PAGE_US_LAST = [
+    "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller",
+    "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez",
+    "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson",
+    "Martin", "Lee", "Perez", "Thompson", "White", "Harris", "Sanchez",
+    "Clark", "Ramirez", "Lewis", "Robinson", "Walker", "Young", "Allen",
+    "King", "Wright", "Scott", "Torres", "Nguyen", "Hill", "Flores",
+    "Green", "Adams", "Nelson", "Baker", "Hall", "Rivera", "Campbell",
+]
+
+def _gen_page_fp():
+    brand, model, w, h, d, av, sdk, carrier, hni = random.choice(_PAGE_DEVICES)
+    fb_ver, fb_bv = random.choice(_PAGE_FB_VERSIONS)
+    conn = random.choice(_PAGE_CONN_TYPES)
+    conn_token = _uuid.uuid4().hex
+    return {
+        "ua": (f"[FBAN/FB4A;FBAV/{fb_ver};FBBV/{fb_bv};"
+               f"FBDM/{{density={d},width={w},height={h}}};FBLC/vi_VN;FBRV/0;"
+               f"FBCR/{carrier};FBMF/{brand.lower()};FBBD/{brand.lower()};"
+               f"FBPN/com.facebook.katana;FBDV/{model};FBSV/{av};FBOP/1;"
+               f"FBCA/x86_64:arm64-v8a;]"),
+        "conn_type": conn,
+        "conn_token": conn_token,
+        "session_id": f"nid={_uuid.uuid4().hex[:8]};tid=301;nc=0;fc=0;bc=0;cid={conn_token}",
+        "device_group": str(random.randint(1000, 9999)),
+        "hni": hni,
+        "privacy": str(random.randint(10**15, 10**16 - 1)),
+        "trace": str(_uuid.uuid4()),
+        "brand": brand, "model": model, "carrier": carrier,
+    }
+
+def _rand_page_name(style='vn'):
+    if style == 'us':
+        first = random.choice(_PAGE_US_FIRST)
+        last  = random.choice(_PAGE_US_LAST)
+        if random.random() < 0.3:
+            mid = random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            return f"{first} {mid}. {last}"
+        return f"{first} {last}"
+    ho  = random.choice(_PAGE_HO)
+    dem = random.choice(_PAGE_DEM)
+    ten = random.choice(_PAGE_TEN)
+    return f"{ho} {dem} {ten}" if dem else f"{ho} {ten}"
+
+def _check_token_live(token):
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/me?fields=id,name&access_token={token}",
+            timeout=15,
+        )
+        j = r.json()
+        if "id" in j:
+            return j["id"], j.get("name", "?")
+    except Exception:
+        pass
+    return None, None
+
+def _create_page_sync(access_token, page_name, fingerprint):
+    url = "https://graph-fallback.facebook.com/graphql"
+    BLOKS   = "f5aecaf4351fddd477cdd2e6caa0dd80aa1ac9dd7027df540897caabc146affd"
+    APP     = "com.bloks.www.additional.profile.plus.creation.action.category.submit"
+    STYLES  = "8e57d61b340c672f5a82cd4d3d821e24"
+    FRIENDLY= "FbBloksActionRootQuery-" + APP
+
+    inner = {
+        "client_input_params": {
+            "entrypoint_logging_data": {
+                "fb_profile_editing_session_entry_point": None,
+                "field_edit_screen_entry_point": None,
+            },
+            "profile_plus_id": "0",
+            "cp_upsell_declined": 0,
+            "off_platform_creator_reachout_id": "",
+            "session_id": None,
+            "category_ids": ["2347428775505624"],
+            "nav_chain": "com.bloks.www.additional.profile.plus.creation,com.bloks.www.additional.profile.plus.creation,,1791748816.167,19071341,,,;",
+        },
+        "server_params": {
+            "referrer": "bottom_sheet_switcher",
+            "INTERNAL__latency_qpl_marker_id": 36707139,
+            "creation_source": "android",
+            "name": page_name,
+            "variant": 8,
+            "screen": "category",
+            "INTERNAL__latency_qpl_instance_id": 54323465500063,
+        },
+    }
+    variables = {
+        "params": {
+            "params": json.dumps(inner, ensure_ascii=False, separators=(",", ":")),
+            "bloks_versioning_id": BLOKS,
+            "app_id": APP,
+        },
+        "scale": "3",
+        "nt_context": {
+            "using_white_navbar": True, "pixel_ratio": 3, "is_push_on": True,
+            "styles_id": STYLES, "bloks_version": BLOKS,
+        },
+    }
+    data = {
+        "method": "post", "pretty": "false", "format": "json",
+        "server_timestamps": "true", "locale": "vi_VN", "purpose": "fetch",
+        "fb_api_req_friendly_name": FRIENDLY,
+        "fb_api_caller_class": "graphservice",
+        "client_doc_id": "1199408042437361526250104613",
+        "variables": json.dumps(variables, ensure_ascii=False, separators=(",", ":")),
+        "fb_api_analytics_tags": '["GraphServices"]',
+        "client_trace_id": fingerprint["trace"],
+    }
+    headers = {
+        "Authorization": f"OAuth {access_token}",
+        "User-Agent": fingerprint["ua"],
+        "X-FB-Friendly-Name": FRIENDLY,
+        "X-FB-HTTP-Engine": "Liger",
+        "X-FB-Connection-Type": fingerprint["conn_type"],
+        "x-fb-connection-token": fingerprint["conn_token"],
+        "x-fb-session-id": fingerprint["session_id"],
+        "x-fb-device-group": fingerprint["device_group"],
+        "x-fb-client-ip": "True",
+        "x-fb-sim-hni": fingerprint["hni"],
+        "x-fb-net-hni": fingerprint["hni"],
+        "x-fb-privacy-context": fingerprint["privacy"],
+        "x-fb-ta-logging-ids": f"graphql:{fingerprint['trace']}",
+        "x-graphql-client-library": "graphservice",
+        "x-graphql-request-purpose": "fetch",
+        "x-tigon-is-retry": "False",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    try:
+        response = requests.post(url, headers=headers, data=data, timeout=12)
+    except Exception as e:
+        return {"success": False, "error": str(e)[:120]}
+
+    try:
+        js = response.json()
+    except Exception:
+        return {"success": False, "error": "invalid_json"}
+
+    if "errors" in js:
+        return {"success": False, "error": str(js["errors"][0].get("message", "unknown"))[:120]}
+
+    page_id = None
+    try:
+        bundle = js["data"]["fb_bloks_action"]["root_action"]["action"]["action_bundle"]["bloks_bundle_action"]
+        m = re.search(r'ADDITIONAL_PROFILE_PLUS_CREATION:profile_plus_id["\\ ,]+(\d{10,20})', bundle)
+        if m:
+            page_id = m.group(1)
+    except (KeyError, TypeError):
+        pass
+
+    if page_id:
+        return {"success": True, "page_id": page_id, "page_name": page_name}
+    return {"success": False, "error": "no_page_id"}
+
+async def _run_page_creation_job(bot_inst, chat_id, tokens, max_per_token, name_style,
+                                  delay_ok, delay_fail):
+    results = []
+    lock    = threading.Lock()
+    counter = {"done": 0, "ok": 0, "fail": 0}
+    total_planned = len(tokens) * max_per_token
+    loop = asyncio.get_running_loop()
+
+    def _worker(token):
+        uid, uname = _check_token_live(token)
+        if not uid:
+            with lock:
+                results.append({"token": token, "uid": "-", "ok": False, "err": "token_die"})
+                counter["done"] += 1
+                counter["fail"] += 1
+            return
+
+        for p in range(1, max_per_token + 1):
+            page_name = _rand_page_name(name_style)
+            fp        = _gen_page_fp()
+            r         = _create_page_sync(token, page_name, fp)
+
+            with lock:
+                if r.get("success"):
+                    results.append({
+                        "uid": uid, "uname": uname, "token": token,
+                        "page_name": page_name, "page_id": r["page_id"], "ok": True,
+                    })
+                    counter["ok"] += 1
+                else:
+                    results.append({
+                        "uid": uid, "uname": uname, "token": token,
+                        "page_name": page_name, "ok": False, "err": r.get("error", "?"),
+                    })
+                    counter["fail"] += 1
+                counter["done"] += 1
+
+            # ─── NGHỈ SAU MỖI PAGE (nếu còn page để tạo) ───
+            if p < max_per_token:
+                if r.get("success"):
+                    delay = delay_ok
+                    tag = "thành công"
+                else:
+                    delay = delay_fail
+                    tag = "thất bại"
+
+                logging.info(f"[Token {uid}] Page #{p} {tag} → nghỉ {delay}s trước page tiếp theo")
+                time.sleep(delay)
+
+    sem = asyncio.Semaphore(PAGE_CREATE_THREADS)
+
+    async def _wrap(token):
+        async with sem:
+            await loop.run_in_executor(None, _worker, token)
+
+    tasks = [asyncio.create_task(_wrap(tk)) for tk in tokens]
+
+    async def _progress_reporter():
+        last = -1
+        while True:
+            await asyncio.sleep(30)
+            with lock:
+                done = counter["done"]; ok = counter["ok"]; fail = counter["fail"]
+            if done != last:
+                last = done
+                try:
+                    await bot_inst.send_message(
+                        chat_id,
+                        f"⏳ **Tiến độ tạo page:**\n"
+                        f"• Đã xử lý: `{done}/{total_planned}`\n"
+                        f"• ✅ Thành công: `{ok}`\n"
+                        f"• ❌ Thất bại: `{fail}`\n\n"
+                        f"💡 *Nghỉ sau OK: `{delay_ok}s` — sau fail: `{delay_fail}s`*",
+                        parse_mode="Markdown",
+                    )
+                except Exception:
+                    pass
+            if all(t.done() for t in tasks):
+                break
+
+    reporter = asyncio.create_task(_progress_reporter())
+    await asyncio.gather(*tasks)
+    reporter.cancel()
+
+    return results, counter
+
+async def _page_creation_task_wrapper(msg_target, user_id, tokens, max_pages, style,
+                                       delay_ok, delay_fail):
+    try:
+        results, counter = await _run_page_creation_job(
+            bot, msg_target.chat.id, tokens, max_pages, style, delay_ok, delay_fail
+        )
+    except Exception as e:
+        logging.error(f"Lỗi page creation job: {e}", exc_info=True)
+        try:
+            await msg_target.answer(f"❌ Lỗi khi chạy job: `{e}`", parse_mode="Markdown")
+        except Exception:
+            pass
+        return
+
+    ok_count   = counter["ok"]
+    fail_count = counter["fail"]
+    total_cost = ok_count * PAGE_CREATE_UNIT_PRICE
+
+    if total_cost > 0:
+        await update_balance(user_id, -total_cost)
+    new_balance = await get_user_balance(user_id)
+
+    await save_page_job(user_id, len(tokens), max_pages, style, delay_ok, delay_fail, ok_count, fail_count, total_cost)
+
+    lines = []
+    for r in results:
+        if r["ok"]:
+            lines.append(f"{r['uid']}|{r['page_name']}|{r['page_id']}")
+    file_bytes = ("\n".join(lines) if lines else "Không có page nào tạo thành công").encode("utf-8")
+    file_out = BufferedInputFile(file_bytes, filename=f"pages_{user_id}_{ok_count}ok.txt")
+
+    summary = (
+        f"🎉 **HOÀN TẤT TẠO PAGE**\n\n"
+        f"• ✅ Thành công: `{ok_count}` page\n"
+        f"• ❌ Thất bại: `{fail_count}` page\n"
+        f"• 💰 Đã trừ: `{total_cost:,} VNĐ` (`{PAGE_CREATE_UNIT_PRICE:,}đ` × `{ok_count}`)\n"
+        f"• 🎁 Page lỗi: **miễn phí**\n"
+        f"• 💳 Số dư còn lại: `{new_balance:,} VNĐ`\n\n"
+        f"📄 File kết quả (`UID|Page Name|Page ID`):"
+    )
+    try:
+        await msg_target.answer(summary, parse_mode="Markdown")
+        await msg_target.answer_document(document=file_out)
+    except Exception as e:
+        logging.error(f"Lỗi gửi kết quả page: {e}")
+
+# ==================== LỆNH BOT ====================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -280,17 +656,22 @@ async def cmd_start(message: types.Message):
             InlineKeyboardButton(text="🔑 Mua Key Tool", callback_data="buy_key_menu")
         ],
         [
-            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit"),
-            InlineKeyboardButton(text="👤 Tài Khoản", callback_data="profile")
+            InlineKeyboardButton(text="🚀 Tạo Page FB", callback_data="page_create_menu"),
+            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit")
+        ],
+        [
+            InlineKeyboardButton(text="👤 Tài Khoản", callback_data="profile"),
+            InlineKeyboardButton(text="🛠️ Hỗ Trợ", callback_data="support")
         ],
     ])
-    
+
     await message.answer(
         f"🤖 HỆ THỐNG BÁN VIA/CLONE & KEY TOOL TỰ ĐỘNG 24/7\n\n"
         f"👋 Chào mừng bạn đến với shop!\n"
-        f"🚀 Chuyên cung cấp tài khoản chất lượng cao và key tool tương tác chéo.\n\n"
+        f"🚀 Chuyên cung cấp tài khoản chất lượng cao, key tool và tạo page tự động.\n\n"
         f"🛡️ Chính sách & Lưu ý:\n"
         f"• Tool TTC chạy page token chỉ chạy mỗi page mua key vào bot để dùng {BOT_TELE}.\n"
+        f"• Tạo page: `{PAGE_CREATE_UNIT_PRICE:,}đ` / page **THÀNH CÔNG** — page lỗi miễn phí.\n"
         f"Vui lòng chọn chức năng bên dưới:",
         reply_markup=keyboard
     )
@@ -318,8 +699,12 @@ async def back_start_callback(call: CallbackQuery):
             InlineKeyboardButton(text="🔑 Mua Key Tool", callback_data="buy_key_menu")
         ],
         [
-            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit"),
-            InlineKeyboardButton(text="👤 Tài Khoản", callback_data="profile")
+            InlineKeyboardButton(text="🚀 Tạo Page FB", callback_data="page_create_menu"),
+            InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit")
+        ],
+        [
+            InlineKeyboardButton(text="👤 Tài Khoản", callback_data="profile"),
+            InlineKeyboardButton(text="🛠️ Hỗ Trợ", callback_data="support")
         ],
     ])
     await call.message.edit_text(
@@ -338,7 +723,7 @@ async def profile_callback(call: CallbackQuery):
     await call.message.answer(
         f"👤 **Thông tin tài khoản:**\n"
         f"- ID của bạn: `{user_id}`\n"
-        f"- Số dư ví: `{balance:,} VNĐ`", 
+        f"- Số dư ví: `{balance:,} VNĐ`",
         parse_mode="Markdown"
     )
     await call.answer()
@@ -348,7 +733,7 @@ async def deposit_callback(call: CallbackQuery):
     user_id = call.from_user.id
     syntax = f"NAP {user_id}"
     qr_url = f"https://img.vietqr.io/image/{BANK_ID}-{BANK_ACCOUNT}-compact2.png?addInfo={syntax}&accountName={urllib_quote(ACCOUNT_NAME)}"
-    
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(qr_url) as resp:
@@ -373,7 +758,7 @@ async def deposit_callback(call: CallbackQuery):
 
     await call.answer()
 
-# ==================== TÍNH NĂNG MUA KEY TOOL ====================
+# ==================== MUA KEY TOOL ====================
 @dp.callback_query(lambda c: c.data == "buy_key_menu")
 async def buy_key_menu_callback(call: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -394,7 +779,7 @@ async def buy_key_menu_callback(call: CallbackQuery):
 @dp.callback_query(lambda c: c.data.startswith("buykey_"))
 async def process_buy_key(call: CallbackQuery):
     days = int(call.data.replace("buykey_", ""))
-    price = days * 1000 
+    price = days * 1000
     user_id = int(call.from_user.id)
 
     balance = await get_user_balance(user_id)
@@ -428,16 +813,17 @@ async def process_buy_key(call: CallbackQuery):
     )
     await call.answer()
 
+# ==================== MUA ACC ====================
 @dp.callback_query(lambda c: c.data.startswith("buy_menu"))
 async def buy_menu_callback(call: CallbackQuery):
     data_parts = call.data.split("_")
     page = int(data_parts[2]) if len(data_parts) > 2 else 0
-    
+
     categories = await get_all_categories()
     keyboard_buttons = []
-    
+
     details_text = "📂 **Chọn loại tài khoản bạn muốn mua:**\n\n"
-    
+
     if not categories:
         details_text += "⚠️ *Shop chưa cập nhật sản phẩm*"
         keyboard_buttons.append([InlineKeyboardButton(text="⚠️ Shop chưa cập nhật sản phẩm", callback_data="back_start")])
@@ -445,50 +831,50 @@ async def buy_menu_callback(call: CallbackQuery):
         ITEMS_PER_PAGE = 5
         total_items = len(categories)
         total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
-        
+
         if page >= total_pages:
             page = total_pages - 1
         if page < 0:
             page = 0
-            
+
         start_idx = page * ITEMS_PER_PAGE
         end_idx = start_idx + ITEMS_PER_PAGE
         current_page_categories = categories[start_idx:end_idx]
-        
+
         for i, cat in enumerate(current_page_categories, start=start_idx + 1):
             cat_code, cat_name, price, format_desc = cat['cat_code'], cat['cat_name'], cat['price'], cat['format_desc']
             count = await get_stock_count(cat_code)
-            
+
             details_text += f"🔹 **{i}.** `{cat_name}`\n    💰 Giá: `{price:,}đ` | 📦 Còn: `{count}`\n\n"
-            
+
             short_name = cat_name[:30] + "..." if len(cat_name) > 30 else cat_name
             btn_text = f"{i}. {short_name} ({price:,}đ)"
             keyboard_buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"buy_{cat_code}")])
-        
+
         pagination_buttons = []
         if page > 0:
             pagination_buttons.append(InlineKeyboardButton(text="◀️ Trang trước", callback_data=f"buy_menu_{page - 1}"))
-        
+
         pagination_buttons.append(InlineKeyboardButton(text=f"📄 {page + 1}/{total_pages}", callback_data="ignore"))
-        
+
         if page < total_pages - 1:
             pagination_buttons.append(InlineKeyboardButton(text="Trang sau ▶️", callback_data=f"buy_menu_{page + 1}"))
-            
+
         if pagination_buttons:
             keyboard_buttons.append(pagination_buttons)
 
     keyboard_buttons.append([InlineKeyboardButton(text="⬅️ Quay lại", callback_data="back_start")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-    
+
     details_text += "👇 *Nhấn vào nút tương ứng bên dưới để mua:*"
-    
+
     try:
         await call.message.edit_text(details_text, reply_markup=keyboard, parse_mode="Markdown")
     except Exception:
         pass
     await call.answer()
 
-@dp.callback_query(lambda c: c.data.startswith("buy_"))
+@dp.callback_query(lambda c: c.data.startswith("buy_") and not c.data.startswith("buy_key") and not c.data.startswith("buy_menu"))
 async def process_buy_category(call: CallbackQuery, state: FSMContext):
     cat_code = call.data.replace("buy_", "")
     stock_count = await get_stock_count(cat_code)
@@ -542,7 +928,6 @@ async def process_typed_quantity(message: types.Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
         await message.reply("⚠️ Vui lòng nhập một con số hợp lệ (ví dụ: `5`, `10`)!", parse_mode="Markdown")
         return
-    
     quantity = int(message.text)
     await finalize_purchase(message, message.from_user.id, quantity, state)
 
@@ -569,29 +954,23 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
         await state.clear()
         return
 
-    # Trừ tiền tạm thời trước khi rút
     await update_balance(user_id, -total_price)
-    
-    # Rút acc từ database
     accounts = await buy_multiple_accounts_from_stock(cat_code, quantity)
-    
-    # 🔍 THÔNG BÁO TIẾN HÀNH CHECK LIVE VÀ LỌC TRÙNG ID
+
     status_msg = await message_target.answer("🔄 **Đang lọc trùng UID & kiểm tra trực tiếp trạng thái Live...**", parse_mode="Markdown")
-    
+
     loop = asyncio.get_running_loop()
     live_accounts, invalid_accounts = await loop.run_in_executor(None, filter_live_accounts, accounts, 10)
-    
+
     live_qty = len(live_accounts)
     invalid_qty = len(invalid_accounts)
-    
-    # Trường hợp nếu tất cả acc rút ra đều hỏng hoặc trùng
+
     if live_qty == 0:
-        await update_balance(user_id, total_price) # Hoàn lại tiền 100%
+        await update_balance(user_id, total_price)
         await status_msg.edit_text("❌ Tất cả tài khoản trong đợt rút này bị lỗi/DIE/Trùng ID! Bot đã hoàn lại 100% tiền cho bạn.")
         await state.clear()
         return
 
-    # Nếu có nick die/trùng, tính toán số tiền hoàn lại cho nick lỗi
     refund_amount = invalid_qty * price
     actual_spent = live_qty * price
     if refund_amount > 0:
@@ -614,26 +993,21 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
         f"📞 *Hỗ trợ liên hệ Telegram:* `{SUPPORT_TELEGRAM}`\n\n"
         f"📄 *Danh sách tài khoản LIVE đã được đính kèm ở file bên dưới:*"
     )
-    
+
     await status_msg.delete()
     await message_target.answer(success_text, parse_mode="Markdown")
     await message_target.answer_document(document=txt_file)
 
-    # ==================== GỬI THÔNG BÁO CHO ADMIN ====================
     try:
         user_name = "Không rõ"
         username_str = "Không có"
-        
         try:
             chat_member = await bot.get_chat(user_id)
             user_name = chat_member.full_name or "Không rõ"
             if chat_member.username:
                 username_str = f"@{chat_member.username}"
         except Exception:
-            if hasattr(message_target, 'from_user') and message_target.from_user and not message_target.from_user.is_bot:
-                user_name = message_target.from_user.full_name or "Không rõ"
-                if message_target.from_user.username:
-                    username_str = f"@{message_target.from_user.username}"
+            pass
 
         vn_time = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
         admin_notification = (
@@ -652,7 +1026,341 @@ async def finalize_purchase(message_target, user_id, quantity, state: FSMContext
 
     await state.clear()
 
-@dp.message(lambda message: message.document is not None)
+# ═══════════════════════════════════════════════════════════════════
+# PAGE CREATOR — HANDLERS
+# ═══════════════════════════════════════════════════════════════════
+@dp.callback_query(lambda c: c.data == "page_create_menu")
+async def page_create_menu(call: CallbackQuery, state: FSMContext):
+    user_id = call.from_user.id
+    balance = await get_user_balance(user_id)
+    text = (
+        f"🚀 **TẠO PAGE FACEBOOK TỰ ĐỘNG**\n\n"
+        f"💰 Giá: `{PAGE_CREATE_UNIT_PRICE:,}đ` / 1 page **THÀNH CÔNG**\n"
+        f"🎁 Page lỗi: **miễn phí** — không trừ tiền\n"
+        f"💳 Số dư của bạn: `{balance:,} VNĐ`\n\n"
+        f"📋 **Hướng dẫn:**\n"
+        f"1️⃣ Chuẩn bị file `.txt` chứa danh sách token (mỗi dòng 1 token)\n"
+        f"2️⃣ Bấm nút bên dưới và gửi file\n"
+        f"3️⃣ Nhập số page tối đa / token (1–{PAGE_CREATE_MAX_PER_TOKEN})\n"
+        f"4️⃣ Chọn kiểu tên (VN / US)\n"
+        f"5️⃣ Cấu hình thời gian nghỉ (mặc định hoặc tùy chỉnh)\n"
+        f"6️⃣ Xác nhận — bot tự chạy\n\n"
+        f"⚠️ *Chỉ tính tiền cho page TẠO THÀNH CÔNG.*"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Gửi file tokens.txt", callback_data="page_upload_start")],
+        [InlineKeyboardButton(text="⬅️ Quay lại", callback_data="back_start")],
+    ])
+    await call.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await call.answer()
+
+@dp.callback_query(lambda c: c.data == "page_upload_start")
+async def page_upload_start(call: CallbackQuery, state: FSMContext):
+    await state.set_state(PageCreateState.waiting_for_tokens)
+    await call.message.edit_text(
+        "📤 **Hãy gửi file `.txt` chứa danh sách token** (mỗi dòng 1 token).\n\n"
+        "VD:\n```\nEAAAAU...\nEAAAAU...\n```",
+        parse_mode="Markdown",
+    )
+    await call.answer()
+
+@dp.message(PageCreateState.waiting_for_tokens, F.document)
+async def page_receive_tokens(message: types.Message, state: FSMContext):
+    doc = message.document
+    if not doc.file_name.lower().endswith(".txt"):
+        await message.reply("⚠️ Vui lòng gửi file `.txt`!")
+        return
+
+    try:
+        file_info = await bot.get_file(doc.file_id)
+        content   = await bot.download_file(file_info.file_path)
+        text      = content.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        await message.reply(f"❌ Không đọc được file: {e}")
+        return
+
+    tokens = [l.strip() for l in text.split("\n") if l.strip() and not l.strip().startswith("#")]
+    if not tokens:
+        await message.reply("❌ File không có token nào hợp lệ!")
+        return
+    if len(tokens) > PAGE_CREATE_MAX_TOKENS:
+        await message.reply(f"❌ Tối đa {PAGE_CREATE_MAX_TOKENS} token / lần. Bạn gửi {len(tokens)}.")
+        return
+
+    await state.update_data(tokens=tokens)
+    await state.set_state(PageCreateState.waiting_for_max_pages)
+    await message.reply(
+        f"✅ Đã nhận **{len(tokens)}** token.\n\n"
+        f"❓ **Nhập số page tối đa cho mỗi token** (1–{PAGE_CREATE_MAX_PER_TOKEN}):",
+        parse_mode="Markdown",
+    )
+
+@dp.message(PageCreateState.waiting_for_max_pages)
+async def page_receive_max_pages(message: types.Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.reply(f"⚠️ Vui lòng nhập số (1–{PAGE_CREATE_MAX_PER_TOKEN}).")
+        return
+    n = int(message.text)
+    if n < 1 or n > PAGE_CREATE_MAX_PER_TOKEN:
+        await message.reply(f"⚠️ Số page phải từ 1 đến {PAGE_CREATE_MAX_PER_TOKEN}.")
+        return
+
+    await state.update_data(max_pages=n)
+    await state.set_state(PageCreateState.waiting_for_name_style)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🇻🇳 Tên Việt Nam", callback_data="pcs_vn"),
+            InlineKeyboardButton(text="🇺🇸 Tên US", callback_data="pcs_us"),
+        ],
+    ])
+    await message.reply("🎭 **Chọn kiểu tên cho page:**", reply_markup=kb)
+
+@dp.callback_query(lambda c: c.data in ("pcs_vn", "pcs_us"), PageCreateState.waiting_for_name_style)
+async def page_choose_style(call: CallbackQuery, state: FSMContext):
+    style = "vn" if call.data == "pcs_vn" else "us"
+    await state.update_data(name_style=style)
+    await state.set_state(PageCreateState.waiting_for_delay_choice)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"🎯 Dùng mặc định (OK: {PAGE_CREATE_DELAY_SUCCESS // 60} phút | Fail: {PAGE_CREATE_DELAY_FAIL // 60} phút)",
+            callback_data="pcs_default_cfg"
+        )],
+        [InlineKeyboardButton(
+            text="⚙️ Tùy chỉnh thời gian nghỉ",
+            callback_data="pcs_custom_cfg"
+        )],
+        [InlineKeyboardButton(text="⬅️ Quay lại", callback_data="back_start")],
+    ])
+    await call.message.edit_text(
+        f"⚡ **CẤU HÌNH THỜI GIAN NGHỈ**\n\n"
+        f"Chọn cách cấu hình thời gian nghỉ giữa các page:\n\n"
+        f"**🎯 Mặc định (khuyến nghị):**\n"
+        f"• Page OK → nghỉ `{PAGE_CREATE_DELAY_SUCCESS}s` ({PAGE_CREATE_DELAY_SUCCESS // 60} phút)\n"
+        f"• Page fail → nghỉ `{PAGE_CREATE_DELAY_FAIL}s` ({PAGE_CREATE_DELAY_FAIL // 60} phút)\n\n"
+        f"**⚙️ Tùy chỉnh:**\n"
+        f"• Bạn tự nhập số giây nghỉ sau mỗi page\n"
+        f"• Giới hạn: OK từ `{DELAY_OK_MIN}–{DELAY_OK_MAX}s`, Fail từ `{DELAY_FAIL_MIN}–{DELAY_FAIL_MAX}s`",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+# ═══════════════════════════════════════════════════════════════════
+# CẤU HÌNH THỜI GIAN NGHỈ — Default / Custom
+# ═══════════════════════════════════════════════════════════════════
+@dp.callback_query(lambda c: c.data == "pcs_default_cfg", PageCreateState.waiting_for_delay_choice)
+async def page_default_config(call: CallbackQuery, state: FSMContext):
+    await state.update_data(
+        delay_ok=PAGE_CREATE_DELAY_SUCCESS,
+        delay_fail=PAGE_CREATE_DELAY_FAIL,
+        is_custom=False
+    )
+    data = await state.get_data()
+    await _render_confirm(call.message, state, data, is_callback=True)
+    await call.answer()
+
+@dp.callback_query(lambda c: c.data == "pcs_custom_cfg", PageCreateState.waiting_for_delay_choice)
+async def page_custom_config_start(call: CallbackQuery, state: FSMContext):
+    await state.set_state(PageCreateState.waiting_for_delay_ok)
+    await call.message.edit_text(
+        f"⚙️ **TÙY CHỈNH THỜI GIAN NGHỈ**\n\n"
+        f"1️⃣ **Nhập số giây nghỉ sau mỗi page THÀNH CÔNG**\n\n"
+        f"• Giới hạn: `{DELAY_OK_MIN} – {DELAY_OK_MAX}` giây\n"
+        f"• Mặc định khuyến nghị: `{PAGE_CREATE_DELAY_SUCCESS}s` (5 phút)\n"
+        f"• VD: `300` = 5 phút, `600` = 10 phút, `900` = 15 phút",
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+@dp.message(PageCreateState.waiting_for_delay_ok)
+async def page_receive_delay_ok(message: types.Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.reply(f"⚠️ Vui lòng nhập số từ `{DELAY_OK_MIN}` đến `{DELAY_OK_MAX}`.", parse_mode="Markdown")
+        return
+    n = int(message.text)
+    if n < DELAY_OK_MIN or n > DELAY_OK_MAX:
+        await message.reply(
+            f"⚠️ Ngoài giới hạn! Phải từ `{DELAY_OK_MIN}` đến `{DELAY_OK_MAX}` giây.\n"
+            f"VD: 180 = 3 phút, 300 = 5 phút, 900 = 15 phút.",
+            parse_mode="Markdown"
+        )
+        return
+
+    await state.update_data(delay_ok=n)
+    await state.set_state(PageCreateState.waiting_for_delay_fail)
+    await message.reply(
+        f"✅ Đã ghi nhận: **{n}s** nghỉ sau page OK.\n\n"
+        f"2️⃣ **Nhập số giây nghỉ sau mỗi page THẤT BẠI**\n\n"
+        f"• Giới hạn: `{DELAY_FAIL_MIN} – {DELAY_FAIL_MAX}` giây\n"
+        f"• Mặc định khuyến nghị: `{PAGE_CREATE_DELAY_FAIL}s` (1 phút)\n"
+        f"• VD: `30` = 30 giây, `120` = 2 phút",
+        parse_mode="Markdown"
+    )
+
+@dp.message(PageCreateState.waiting_for_delay_fail)
+async def page_receive_delay_fail(message: types.Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.reply(f"⚠️ Vui lòng nhập số từ `{DELAY_FAIL_MIN}` đến `{DELAY_FAIL_MAX}`.", parse_mode="Markdown")
+        return
+    n = int(message.text)
+    if n < DELAY_FAIL_MIN or n > DELAY_FAIL_MAX:
+        await message.reply(
+            f"⚠️ Ngoài giới hạn! Phải từ `{DELAY_FAIL_MIN}` đến `{DELAY_FAIL_MAX}` giây.\n"
+            f"VD: 30 = 30 giây, 60 = 1 phút.",
+            parse_mode="Markdown"
+        )
+        return
+
+    await state.update_data(delay_fail=n, is_custom=True)
+    data = await state.get_data()
+    await _render_confirm(message, state, data, is_callback=False)
+
+async def _render_confirm(msg_target, state: FSMContext, data: dict, is_callback=False):
+    """Vẽ màn hình xác nhận cuối cùng, chờ pcs_confirm."""
+    await state.set_state(PageCreateState.waiting_for_name_style)  # tái dùng state để hứng pcs_confirm
+
+    tokens     = data["tokens"]
+    max_pages  = data["max_pages"]
+    style      = data["name_style"]
+    delay_ok   = data["delay_ok"]
+    delay_fail = data["delay_fail"]
+
+    max_total = len(tokens) * max_pages
+    max_price = max_total * PAGE_CREATE_UNIT_PRICE
+
+    # Lấy user_id
+    if is_callback:
+        user_id = msg_target.chat.id
+    else:
+        user_id = msg_target.chat.id
+    balance = await get_user_balance(user_id)
+
+    label = "Việt Nam" if style == "vn" else "US"
+
+    # Ước lượng thời gian của 1 token (song song)
+    total_delay_seconds = (max_pages - 1) * delay_ok
+    if total_delay_seconds < 60:
+        time_est = f"~{total_delay_seconds} giây"
+    elif total_delay_seconds < 3600:
+        time_est = f"~{total_delay_seconds // 60} phút"
+    else:
+        h = total_delay_seconds // 3600
+        m = (total_delay_seconds % 3600) // 60
+        time_est = f"~{h} giờ {m} phút"
+
+    text = (
+        f"📋 **XÁC NHẬN TẠO PAGE**\n\n"
+        f"• Số token: `{len(tokens)}`\n"
+        f"• Page tối đa / token: `{max_pages}`\n"
+        f"• Tổng page tối đa: `{max_total}`\n"
+        f"• Kiểu tên: **{label}**\n"
+        f"• ⏱️ Nghỉ sau OK: `{delay_ok}s` ({delay_ok // 60} phút)\n"
+        f"• ⏱️ Nghỉ sau fail: `{delay_fail}s` ({delay_fail // 60} phút)\n\n"
+        f"💰 Giá: `{PAGE_CREATE_UNIT_PRICE:,}đ/page` (chỉ tính page OK)\n"
+        f"🎁 Page lỗi: **miễn phí**\n"
+        f"💳 Số dư hiện tại: `{balance:,} VNĐ`\n"
+        f"🧾 Tối đa có thể trừ: `{max_price:,} VNĐ`\n\n"
+        f"⏱️ **Thời gian ước tính:** {time_est}\n"
+        f"*(Các token chạy song song, đây là thời gian của 1 token)*\n\n"
+        f"👉 Bấm **Xác nhận** để bắt đầu:"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Xác nhận chạy", callback_data="pcs_confirm"),
+            InlineKeyboardButton(text="❌ Huỷ", callback_data="pcs_cancel"),
+        ],
+    ])
+
+    if is_callback:
+        await msg_target.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    else:
+        await msg_target.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+# ═══════════════════════════════════════════════════════════════════
+# XÁC NHẬN / HUỶ
+# ═══════════════════════════════════════════════════════════════════
+@dp.callback_query(lambda c: c.data == "pcs_confirm", PageCreateState.waiting_for_name_style)
+async def page_confirm_cb(call: CallbackQuery, state: FSMContext):
+    data      = await state.get_data()
+    await state.clear()
+
+    tokens     = data.get("tokens")
+    max_pages  = data.get("max_pages")
+    style      = data.get("name_style")
+    delay_ok   = data.get("delay_ok", PAGE_CREATE_DELAY_SUCCESS)
+    delay_fail = data.get("delay_fail", PAGE_CREATE_DELAY_FAIL)
+    user_id    = call.from_user.id
+
+    if not tokens or not max_pages or not style:
+        await call.message.edit_text("❌ Phiên đã hết hạn. Vui lòng bắt đầu lại.")
+        await call.answer()
+        return
+
+    balance  = await get_user_balance(user_id)
+    max_cost = len(tokens) * max_pages * PAGE_CREATE_UNIT_PRICE
+    if balance < max_cost:
+        await call.message.edit_text(
+            f"❌ Số dư không đủ!\n"
+            f"Cần tối đa: `{max_cost:,} VNĐ` — Bạn có: `{balance:,} VNĐ`\n"
+            f"Vui lòng nạp thêm rồi thử lại.",
+            parse_mode="Markdown",
+        )
+        await call.answer()
+        return
+
+    await call.message.edit_text(
+        f"⚙️ **Đang khởi động job tạo page...**\n"
+        f"• Tokens: `{len(tokens)}`\n"
+        f"• Max/token: `{max_pages}`\n"
+        f"• Kiểu tên: **{'VN' if style == 'vn' else 'US'}**\n"
+        f"• Nghỉ OK: `{delay_ok}s` | Fail: `{delay_fail}s`\n\n"
+        f"⏳ Bot sẽ báo tiến độ mỗi ~30s.",
+        parse_mode="Markdown",
+    )
+    await call.answer()
+
+    asyncio.create_task(_page_creation_task_wrapper(
+        call.message, user_id, tokens, max_pages, style, delay_ok, delay_fail
+    ))
+
+    # Báo admin
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f"🚀 **Có job tạo page mới**\n"
+            f"• User: `{user_id}`\n"
+            f"• Tokens: `{len(tokens)}`\n"
+            f"• Max/token: `{max_pages}`\n"
+            f"• Style: **{'VN' if style == 'vn' else 'US'}**\n"
+            f"• Delay OK/Fail: `{delay_ok}s / {delay_fail}s`",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        pass
+
+@dp.callback_query(lambda c: c.data == "pcs_cancel")
+async def page_cancel_cb(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await call.message.edit_text("❌ Đã huỷ job.")
+    except Exception:
+        pass
+    await call.answer()
+
+# ═══════════════════════════════════════════════════════════════════
+# ADMIN: /createpage
+# ═══════════════════════════════════════════════════════════════════
+@dp.message(Command("createpage"))
+async def cmd_createpage_admin(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(PageCreateState.waiting_for_tokens)
+    await message.reply("👑 **Admin mode** — gửi file tokens.txt (admin vẫn bị trừ tiền theo cấu hình).")
+
+# ==================== UPLOAD FILE (ADMIN) ====================
+@dp.message(lambda message: message.document is not None, StateFilter(None))
 async def handle_document_upload(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
@@ -661,7 +1369,7 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
 
     document = message.document
     file_name = document.file_name
-    
+
     if not file_name.endswith('.txt'):
         await message.reply("⚠️ Vui lòng gửi file có định dạng `.txt`!", parse_mode="Markdown")
         return
@@ -670,7 +1378,7 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
 
     file_info = await bot.get_file(document.file_id)
     file_path = file_info.file_path
-    
+
     downloaded_file = await bot.download_file(file_path)
     file_content = downloaded_file.read().decode('utf-8', errors='ignore')
 
@@ -679,10 +1387,10 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
 
     async with db_pool.acquire() as conn:
         existing_cat = await conn.fetchrow('SELECT cat_name, price, format_desc FROM categories WHERE cat_code = $1', cat_code)
-        
+
         if not existing_cat:
             await conn.execute(
-                'INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES ($1, $2, $3, $4)', 
+                'INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES ($1, $2, $3, $4)',
                 cat_code, default_cat_name, default_price, default_format_desc
             )
             current_cat_name = default_cat_name
@@ -725,7 +1433,7 @@ async def sepay_webhook_handler(request):
     try:
         auth_header = request.headers.get("Authorization")
         expected_auth = f"Apikey {SEPAY_API_KEY}"
-        
+
         if not auth_header or auth_header != expected_auth:
             logging.warning("Cảnh báo: Webhook SePay gọi đến nhưng sai hoặc thiếu API Key!")
             return web.json_response({"success": False, "error": "Unauthorized: Invalid API Key"}, status=401)
@@ -769,37 +1477,38 @@ async def sepay_webhook_handler(request):
     except Exception as e:
         logging.error(f"Lỗi xử lý SePay Webhook: {e}")
         return web.json_response({"success": False, "error": str(e)}, status=500)
+
 async def scheduled_notification_task():
-    interval = 10 * 3600  
+    interval = 10 * 3600
     await asyncio.sleep(10)
-    
+
     while True:
         try:
             if db_pool:
                 async with db_pool.acquire() as conn:
                     rows = await conn.fetch('SELECT user_id FROM users')
-                    
+
                     for row in rows:
                         user_id = row['user_id']
                         try:
                             await bot.send_message(
                                 user_id,
                                 "🔔 **Thông báo định kỳ:**\n"
-                                "Shop vẫn hoạt động 24/7. AE cần mua clone hoặc key tool giá rẻ cứ ghé shop ủng hộ mình nhé!",
+                                "Shop vẫn hoạt động 24/7. AE cần mua clone, key tool hoặc tạo page tự động giá rẻ cứ ghé shop ủng hộ mình nhé!",
                                 parse_mode="Markdown"
                             )
-                            await asyncio.sleep(10) 
+                            await asyncio.sleep(10)
                         except Exception as e:
                             logging.error(f"Không thể gửi tin nhắn cho user {user_id}: {e}")
-                            
+
             logging.info("Đã gửi thông báo định kỳ 10 tiếng cho người dùng.")
         except Exception as e:
             logging.error(f"Lỗi trong task thông báo định kỳ: {e}")
-            
+
         await asyncio.sleep(interval)
 
 async def keep_alive_task():
-    interval = 3 * 60  
+    interval = 3 * 60
     print(f"--- Bắt đầu script giữ sống cho: {SELF_URL} ---")
     while True:
         await asyncio.sleep(interval)
@@ -821,10 +1530,10 @@ async def main():
     app = web.Application()
     app.router.add_post('/api/webhook/sepay', sepay_webhook_handler)
     app.router.add_get('/', lambda request: web.Response(text="Bot is running!"))
-    
+
     runner = web.AppRunner(app)
     await runner.setup()
-    
+
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, WEBHOOK_HOST, port)
     await site.start()
@@ -837,4 +1546,4 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
-    asyncio.run(main())    
+    asyncio.run(main())
