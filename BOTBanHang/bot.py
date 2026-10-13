@@ -330,13 +330,13 @@ def get_category_info_by_filename(filename):
     elif "NEWZIN" in fname:
         return ("cat_new_zin", "Clone 6159 - ON2FA -  NAME NGOẠI IP VIỆT - NEW ZIN ALL(Nên mua ít test kỹ trước khi mua SLL)", 1500, "UID | Pass | 2FA | Cookie | Token |MAIL ẢO")
     elif "PAGE" in fname or "KEPPAGE" in fname:
-        return ("cat_acc_kep_page", "CLONE KẸP PAGE NAME VIỆT RANDOM 5-10 - ON2FA - AVT-BÌA (RANDOM) ", 6000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")
+        return ("cat_acc_kep_page", "CLONE KẸP PAGE NAME VIỆT RANDOM 15 - ON2FA - AVT-BÌA (RANDOM) ", 15000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")
     elif "TRUST" in fname or "2FA" in fname:
         return ("cat_fb_2fa_trust", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA, NO AVT - HOTMAIL TRUST ", 3000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU| Hotmail | Pass Hotmail")
     elif "HOTMAIL" in fname or "OUTLOOK" in fname:
         return ("cat_hot_trust", "HOTMAIL-OUTLOOK TRUST 6-12TH CÓ MAILKP ", 350, "MAIL|PASS|RERFESH|CLIENT|MAILKP")
     elif "GMAIL" in fname:
-        return ("cat_gmail", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA - NO AVT - VER GMAIL ", 3500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU|MAIL")
+        return ("cat_gmail", "CLONE NGÂM TRÂU - NAME RANDOM - ON2FA - AVT+BÌA - VER GMAIL ", 3500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU|MAIL")
     elif "PHONE" in fname:
         return ("cat_phone", "CLONE NEW - NAME VIỆT - ON2FA - AVT - 3 POST - VER PHONE ", 2500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU")
     elif "DIEMAIL" in fname:
