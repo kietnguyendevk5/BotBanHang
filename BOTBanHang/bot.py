@@ -125,11 +125,8 @@ def extract_sender_name(content: str, description: str = "") -> str:
     if not text:
         return "Không rõ"
 
-    # Bỏ mã NAP xxxxx
     text = re.sub(r'NAP\s*\d+', '', text, flags=re.IGNORECASE).strip()
-    # Bỏ từ khóa ngân hàng
     text = re.sub(r'(chuyen\s*tien|chuyển\s*tiền|ck|transfer|GD)', '', text, flags=re.IGNORECASE).strip()
-    # Xóa khoảng trắng dư
     text = re.sub(r'\s+', ' ', text).strip()
 
     return text[:60] if text else "Không rõ"
@@ -759,11 +756,9 @@ async def cmd_view_logs(message: types.Message):
     for r in rows:
         text += (
             f"🕒 `{format_vn_datetime(r['created_at'])}`\n"
-            f"👤 Người chuyển: `{r['sender_name']}`\n"
             f"💰 Số tiền: `{r['amount']:,} VNĐ`\n"
             f"🆔 User ID: `{r['user_id']}`\n"
             f"🏦 NH: `{r['bank_name']}`\n"
-            f"📝 ND: `{(r['content'] or '')[:50]}`\n"
             f"──────────────\n"
         )
     await message.reply(text, parse_mode="Markdown")
@@ -824,11 +819,11 @@ async def sepay_webhook_handler(request):
                 if inserted:
                     await update_balance(user_id, amount)
                     new_bal = await get_user_balance(user_id)
+                    # 🎯 KHÔNG hiển thị tên người chuyển
                     await bot.send_message(
                         user_id,
                         f"🎉 **NẠP TIỀN THÀNH CÔNG!**\n\n"
                         f"💰 Số tiền: `+{amount:,} VNĐ`\n"
-                        f"👤 Người chuyển: `{sender_name}`\n"
                         f"🏦 Ngân hàng: `{bank_name}`\n"
                         f"💵 Số dư: `{new_bal:,} VNĐ`\n"
                         f"🕒 Thời gian: `{format_vn_datetime(vn_now)}`",
