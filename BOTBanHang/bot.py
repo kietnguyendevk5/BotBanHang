@@ -726,10 +726,10 @@ async def cmd_start(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📦 Mua Tài Khoản", callback_data="buy_menu"),
-            InlineKeyboardButton(text="🔑 Mua Key Tool", callback_data="buy_key_menu")
+            # InlineKeyboardButton(text="🔑 Mua Key Tool", callback_data="buy_key_menu")
         ],
         [
-            InlineKeyboardButton(text="🚀 Tạo Page FB", callback_data="page_create_menu"),
+            # InlineKeyboardButton(text="🚀 Tạo Page FB", callback_data="page_create_menu"),
             InlineKeyboardButton(text="💰 Nạp Tiền", callback_data="deposit")
         ],
         [
