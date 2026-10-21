@@ -338,7 +338,7 @@ def get_category_info_by_filename(filename):
     elif "GMAIL" in fname:
         return ("cat_gmail", "CLONE NGÂM TRÂU - NAME VIỆT - ON2FA - AVT+BÌA - VER GMAIL ", 3500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU|MAIL")
     elif "NUOI" in fname:
-            return ("cat_nuoi", "CLONE VIỆT NUÔI NHIỀU BB - NAME+IP VIỆT - ON2FA - AVT+BÌA - VER GMAIL(random có add mail ảo lấy code) ", 10000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU|MAIL")
+            return ("cat_nuoi", "CLONE VIỆT NUÔI NHIỀU BB - NAME+IP VIỆT - ON2FA - AVT+BÌA - VER GMAIL(random có add mail ảo lấy code) ", 10000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU|MAIL(tinhost.shop)")
     elif "PHONE" in fname:
         return ("cat_phone", "CLONE NEW - NAME VIỆT - ON2FA - AVT - 3 POST - VER PHONE ", 2500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU")
     elif "DIEMAIL" in fname:
