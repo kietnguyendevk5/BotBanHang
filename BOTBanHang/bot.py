@@ -823,42 +823,74 @@ async def profile_callback(call: CallbackQuery):
 async def deposit_callback(call: CallbackQuery):
     user_id = call.from_user.id
     syntax = f"NAP {user_id}"
-    # Tạo link QR VietQR
-    qr_url = f"https://img.vietqr.io/image/{BANK_ID}-{BANK_ACCOUNT}-compact2.png?addInfo={urllib_quote(syntax)}&accountName={urllib_quote(ACCOUNT_NAME)}"
+
+    # Dùng params để mã hóa đúng dấu cách/ký tự trong nội dung chuyển khoản.
+    qr_url = (
+        f"https://img.vietqr.io/image/"
+        f"{BANK_ID}-{BANK_ACCOUNT}-compact2.png"
+    )
+    params = {
+        "addInfo": syntax,
+        "accountName": ACCOUNT_NAME,
+    }
 
     caption = (
-        f"💰 **QUÉT MÃ QR ĐỂ NẠP TIỀN TỰ ĐỘNG**\n\n"
-        f"- Ngân hàng: **MB Bank**\n"
-        f"- STK: `{BANK_ACCOUNT}`\n"
-        f"- Chủ tên: **{ACCOUNT_NAME}**\n"
-        f"- Nội dung: `{syntax}`\n\n"
-        f"⚠️ *Dùng app ngân hàng quét mã QR để nạp tự động.*\n"
-        f"⚠️ *MIN NẠP 10,000đ.*"
+        f"💰 **QUÉT MÃ QR ĐỂ NẠP TIỀN TỰ ĐỘNG**\\n\\n"
+        f"- Ngân hàng: **MB Bank**\\n"
+        f"- STK: `{BANK_ACCOUNT}`\\n"
+        f"- Chủ tài khoản: **{ACCOUNT_NAME}**\\n"
+        f"- Nội dung chuyển khoản (bắt buộc): `{syntax}`\\n\\n"
+        f"⚠️ Quét mã bằng ứng dụng ngân hàng và giữ nguyên nội dung chuyển khoản.\\n"
+        f"⚠️ Số tiền nạp tối thiểu: **10.000đ**."
     )
 
     try:
-        # Thêm timeout và User-Agent để tránh bị server chặn
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        timeout = aiohttp.ClientTimeout(total=10)
-        
+        timeout = aiohttp.ClientTimeout(total=20, connect=8)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(qr_url, headers=headers) as resp:
-                if resp.status == 200:
-                    qr_bytes = await resp.read()
-                    photo = BufferedInputFile(qr_bytes, filename="qr.png")
-                    await call.message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
-                else:
-                    raise Exception(f"HTTP Status {resp.status}")
-    except Exception as e:
-        logging.error(f"Lỗi tải mã QR (dùng fallback link): {e}")
-        # Fallback: Gửi link ảnh trực tiếp, Telegram sẽ tự render thành ảnh
-        await call.message.answer_photo(
-            photo=qr_url, 
-            caption=caption + "\n\n*(Ảnh tải trực tiếp từ link)*", 
-            parse_mode="Markdown"
-        )
+            async with session.get(
+                qr_url,
+                params=params,
+                headers={"User-Agent": "Mozilla/5.0"},
+            ) as resp:
+                content_type = resp.headers.get("Content-Type", "").lower()
+                qr_bytes = await resp.read()
 
-    await call.answer()
+                # VietQR phải trả về dữ liệu ảnh; HTTP 200 đôi khi vẫn là trang lỗi.
+                is_png = qr_bytes.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
+                is_jpeg = qr_bytes.startswith(b"\\xff\\xd8\\xff")
+                if resp.status != 200 or not (is_png or is_jpeg):
+                    preview = qr_bytes[:250].decode("utf-8", errors="replace")
+                    logging.error(
+                        "VietQR lỗi: status=%s content_type=%s body=%r",
+                        resp.status, content_type, preview,
+                    )
+                    raise RuntimeError(
+                        f"VietQR trả về dữ liệu không hợp lệ (HTTP {resp.status})"
+                    )
+
+                filename = "qr.png" if is_png else "qr.jpg"
+                photo = BufferedInputFile(qr_bytes, filename=filename)
+                await call.message.answer_photo(
+                    photo=photo,
+                    caption=caption,
+                    parse_mode="Markdown",
+                )
+
+    except Exception:
+        logging.exception("Không tạo/gửi được mã QR nạp tiền")
+        await call.message.answer(
+            "⚠️ **Chưa tải được mã QR. Bạn có thể chuyển khoản thủ công:**\\n\\n"
+            f"🏦 Ngân hàng: MB Bank\\n"
+            f"💳 STK: `{BANK_ACCOUNT}`\\n"
+            f"👤 Chủ tài khoản: `{ACCOUNT_NAME}`\\n"
+            f"📝 Nội dung: `{syntax}`\\n"
+            "💵 Nạp tối thiểu: `10.000đ`\\n\\n"
+            "Vui lòng giữ nguyên nội dung chuyển khoản để hệ thống nhận diện.",
+            parse_mode="Markdown",
+        )
+    finally:
+        await call.answer()
+
 
 # ==================== MUA KEY TOOL ====================
 @dp.callback_query(lambda c: c.data == "buy_key_menu")
