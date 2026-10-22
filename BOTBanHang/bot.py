@@ -824,8 +824,8 @@ async def deposit_callback(call: CallbackQuery):
     user_id = call.from_user.id
     syntax = f"NAP {user_id}"
     
-    # Tạo link QR chuẩn VietQR
-    qr_url = f"https://img.vietqr.io/image/{BANK_ID}-{BANK_ACCOUNT}-compact2.png?addInfo={urllib_quote(syntax)}&accountName={urllib_quote(ACCOUNT_NAME)}"
+    # Dùng API vietqr.app theo gợi ý của bạn, thêm tham số 'des' (description) để điền nội dung
+    qr_url = f"https://vietqr.app/img?bank=MBBank&acc={BANK_ACCOUNT}&template=compact&des={urllib_quote(syntax)}&showinfo=true&holder={urllib_quote(ACCOUNT_NAME)}"
 
     caption = (
         f"💰 **QUÉT MÃ QR ĐỂ NẠP TIỀN TỰ ĐỘNG**\n\n"
@@ -838,11 +838,11 @@ async def deposit_callback(call: CallbackQuery):
     )
 
     try:
-        # Gửi thẳng link ảnh cho Telegram tự xử lý (tránh lỗi timeout từ Render)
+        # Gửi thẳng link ảnh cho Telegram (Telegram sẽ tự động tải và hiển thị ảnh)
         await call.message.answer_photo(photo=qr_url, caption=caption, parse_mode="Markdown")
     except Exception as e:
         logging.error(f"Lỗi gửi ảnh QR qua Telegram: {e}")
-        # Nếu Telegram cũng không tải được ảnh thì mới in ra text dự phòng
+        # Fallback nếu Telegram bó tay không tải được ảnh
         await call.message.answer(
             f"💰 **CHUYỂN KHOẢN THỦ CÔNG**\n\n"
             f"- Ngân hàng: **MB Bank**\n"
