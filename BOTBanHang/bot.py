@@ -856,8 +856,8 @@ async def deposit_callback(call: CallbackQuery):
                 qr_bytes = await resp.read()
 
                 # VietQR phải trả về dữ liệu ảnh; HTTP 200 đôi khi vẫn là trang lỗi.
-                is_png = qr_bytes.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
-                is_jpeg = qr_bytes.startswith(b"\\xff\\xd8\\xff")
+                is_png = qr_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+                is_jpeg = qr_bytes.startswith(b"\xff\xd8\xff")
                 if resp.status != 200 or not (is_png or is_jpeg):
                     preview = qr_bytes[:250].decode("utf-8", errors="replace")
                     logging.error(
