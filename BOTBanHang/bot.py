@@ -823,29 +823,40 @@ async def profile_callback(call: CallbackQuery):
 async def deposit_callback(call: CallbackQuery):
     user_id = call.from_user.id
     syntax = f"NAP {user_id}"
-    qr_url = f"https://img.vietqr.io/image/{BANK_ID}-{BANK_ACCOUNT}-compact2.png?addInfo={syntax}&accountName={urllib_quote(ACCOUNT_NAME)}"
+    # Tạo link QR VietQR
+    qr_url = f"https://img.vietqr.io/image/{BANK_ID}-{BANK_ACCOUNT}-compact2.png?addInfo={urllib_quote(syntax)}&accountName={urllib_quote(ACCOUNT_NAME)}"
+
+    caption = (
+        f"💰 **QUÉT MÃ QR ĐỂ NẠP TIỀN TỰ ĐỘNG**\n\n"
+        f"- Ngân hàng: **MB Bank**\n"
+        f"- STK: `{BANK_ACCOUNT}`\n"
+        f"- Chủ tên: **{ACCOUNT_NAME}**\n"
+        f"- Nội dung: `{syntax}`\n\n"
+        f"⚠️ *Dùng app ngân hàng quét mã QR để nạp tự động.*\n"
+        f"⚠️ *MIN NẠP 10,000đ.*"
+    )
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(qr_url) as resp:
+        # Thêm timeout và User-Agent để tránh bị server chặn
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        timeout = aiohttp.ClientTimeout(total=10)
+        
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(qr_url, headers=headers) as resp:
                 if resp.status == 200:
                     qr_bytes = await resp.read()
                     photo = BufferedInputFile(qr_bytes, filename="qr.png")
-                    caption = (
-                        f"💰 **QUÉT MÃ QR ĐỂ NẠP TIỀN TỰ ĐỘNG**\n\n"
-                        f"- Ngân hàng: **MB Bank**\n"
-                        f"- STK: `{BANK_ACCOUNT}`\n"
-                        f"- Chủ tên: **{ACCOUNT_NAME}**\n"
-                        f"- Nội dung chuyển khoản (Bắt buộc): `{syntax}`\n\n"
-                        f"⚠️ *Dùng app ngân hàng quét mã QR để nạp tự động sau vài giây.*\n"
-                        f"⚠️ *MIN NẠP 10,000đ.*"
-                    )
                     await call.message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
                 else:
-                    await call.message.answer("❌ Không thể tạo mã QR lúc này!")
+                    raise Exception(f"HTTP Status {resp.status}")
     except Exception as e:
-        logging.error(f"Lỗi tải mã QR: {e}")
-        await call.message.answer(f"💰 Chuyển khoản thủ công:\n- STK: `{BANK_ACCOUNT}`\n- Nội dung: `{syntax}`\n- MIN NẠP: 10,000đ")
+        logging.error(f"Lỗi tải mã QR (dùng fallback link): {e}")
+        # Fallback: Gửi link ảnh trực tiếp, Telegram sẽ tự render thành ảnh
+        await call.message.answer_photo(
+            photo=qr_url, 
+            caption=caption + "\n\n*(Ảnh tải trực tiếp từ link)*", 
+            parse_mode="Markdown"
+        )
 
     await call.answer()
 
