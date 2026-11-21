@@ -172,6 +172,38 @@ async def init_db():
                     account_info TEXT NOT NULL
                 )
             ''')
+            
+            # Xóa UID trùng đã tồn tại, giữ lại bản ghi cũ nhất
+            await conn.execute("""
+                WITH duplicate_rows AS (
+                    SELECT
+                        id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY LOWER(
+                                BTRIM(SPLIT_PART(account_info, '|', 1))
+                            )
+                            ORDER BY id ASC
+                        ) AS rn
+                    FROM stock
+                    WHERE BTRIM(SPLIT_PART(account_info, '|', 1)) <> ''
+                )
+                DELETE FROM stock
+                WHERE id IN (
+                    SELECT id
+                    FROM duplicate_rows
+                    WHERE rn > 1
+                )
+            """)
+            
+            # Tạo UNIQUE INDEX chống UID trùng trên toàn bộ kho
+            await conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_unique_uid
+                ON stock (
+                    LOWER(BTRIM(SPLIT_PART(account_info, '|', 1)))
+                )
+                WHERE BTRIM(SPLIT_PART(account_info, '|', 1)) <> ''
+            """)
+            ''')
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS transactions (
                     sepay_id BIGINT PRIMARY KEY,
@@ -1573,48 +1605,138 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     await state.clear()
 
     document = message.document
-    file_name = document.file_name
+    file_name = document.file_name or ""
 
-    if not file_name.endswith('.txt'):
-        await message.reply("⚠️ Vui lòng gửi file có định dạng `.txt`!", parse_mode="Markdown")
+    if not file_name.lower().endswith('.txt'):
+        await message.reply(
+            "⚠️ Vui lòng gửi file có định dạng `.txt`!",
+            parse_mode="Markdown"
+        )
         return
 
-    cat_code, default_cat_name, default_price, default_format_desc = get_category_info_by_filename(file_name)
-
-    file_info = await bot.get_file(document.file_id)
-    file_path = file_info.file_path
-
-    downloaded_file = await bot.download_file(file_path)
-    file_content = downloaded_file.read().decode('utf-8', errors='ignore')
-
-    lines = file_content.split('\n')
-    added_count = 0
-
-    async with db_pool.acquire() as conn:
-        existing_cat = await conn.fetchrow('SELECT cat_name, price, format_desc FROM categories WHERE cat_code = $1', cat_code)
-
-        if not existing_cat:
-            await conn.execute(
-                'INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES ($1, $2, $3, $4)',
-                cat_code, default_cat_name, default_price, default_format_desc
-            )
-            current_cat_name = default_cat_name
-        else:
-            current_cat_name = existing_cat['cat_name']
-
-        for line in lines:
-            line = line.strip()
-            if line:
-                await conn.execute('INSERT INTO stock (cat_code, account_info) VALUES ($1, $2)', cat_code, line)
-                added_count += 1
-
-    await message.reply(
-        f"📥 **Đã nhập kho thành công!**\n"
-        f"- Tên file: `{file_name}`\n"
-        f"- Phân loại vào: **{current_cat_name[:30]}...**\n"
-        f"- Đã thêm: **{added_count}** tài khoản mới vào kho.",
-        parse_mode="Markdown"
+    cat_code, default_cat_name, default_price, default_format_desc = (
+        get_category_info_by_filename(file_name)
     )
+
+    try:
+        file_info = await bot.get_file(document.file_id)
+        downloaded_file = await bot.download_file(file_info.file_path)
+
+        file_content = downloaded_file.read().decode(
+            'utf-8',
+            errors='ignore'
+        )
+
+    except Exception as e:
+        await message.reply(f"❌ Lỗi đọc file: {e}")
+        return
+
+    lines = [
+        line.strip()
+        for line in file_content.splitlines()
+        if line.strip()
+    ]
+
+    if not lines:
+        await message.reply("⚠️ File không có tài khoản nào!")
+        return
+
+    added_count = 0
+    duplicate_count = 0
+    seen_uids = set()
+    invalid_count = 0
+
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.transaction():
+
+                existing_cat = await conn.fetchrow(
+                    '''
+                    SELECT cat_name, price, format_desc
+                    FROM categories
+                    WHERE cat_code = $1
+                    ''',
+                    cat_code
+                )
+
+                if not existing_cat:
+                    await conn.execute(
+                        '''
+                        INSERT INTO categories
+                        (cat_code, cat_name, price, format_desc)
+                        VALUES ($1, $2, $3, $4)
+                        ''',
+                        cat_code,
+                        default_cat_name,
+                        default_price,
+                        default_format_desc
+                    )
+
+                    current_cat_name = default_cat_name
+
+                else:
+                    current_cat_name = existing_cat['cat_name']
+
+                for line in lines:
+
+                    # Lấy UID ở phần đầu tiên trước dấu |
+                    uid = line.split('|', 1)[0].strip()
+
+                    if not uid:
+                        invalid_count += 1
+                        continue
+
+                    # Chuẩn hóa UID để kiểm tra trùng trong file
+                    uid_normalized = uid.casefold()
+
+                    if uid_normalized in seen_uids:
+                        duplicate_count += 1
+                        continue
+
+                    seen_uids.add(uid_normalized)
+
+                    # PostgreSQL tự kiểm tra UID trùng toàn bộ kho
+                    inserted = await conn.fetchval(
+                        '''
+                        INSERT INTO stock (cat_code, account_info)
+                        VALUES ($1, $2)
+                        ON CONFLICT DO NOTHING
+                        RETURNING id
+                        ''',
+                        cat_code,
+                        line
+                    )
+
+                    if inserted:
+                        added_count += 1
+                    else:
+                        duplicate_count += 1
+
+        await message.reply(
+            f"📥 **NHẬP KHO HOÀN TẤT!**\n\n"
+            f"📁 Tên file: `{file_name}`\n"
+            f"📦 Danh mục: `{current_cat_name}`\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"✅ Thêm mới: `{added_count}` tài khoản\n"
+            f"♻️ UID trùng bỏ qua: `{duplicate_count}`\n"
+            f"⚠️ Dòng không hợp lệ: `{invalid_count}`\n"
+            f"📊 Tổng số dòng: `{len(lines)}`\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"🛡️ Hệ thống đã kiểm tra UID trên toàn bộ kho.",
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        logging.error(
+            f"Lỗi nhập kho: {e}",
+            exc_info=True
+        )
+
+        await message.reply(
+            f"❌ Lỗi khi nhập kho: `{str(e)[:500]}`",
+            parse_mode="Markdown"
+        )
+
 
 @dp.message(Command("addmoney"))
 async def cmd_add_money(message: types.Message):
