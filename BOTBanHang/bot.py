@@ -121,7 +121,7 @@ def filter_live_accounts(accounts, max_workers=10):
         acc_str = acc.strip()
         if not acc_str:
             continue
-        uid = acc_str.split('|')[0].strip()
+        uid = acc_str.split('|')[0].strip().lower()
         if uid in seen_uids:
             duplicate_accs.append(acc_str)
         else:
@@ -169,9 +169,22 @@ async def init_db():
                 CREATE TABLE IF NOT EXISTS stock (
                     id SERIAL PRIMARY KEY,
                     cat_code TEXT NOT NULL,
-                    account_info TEXT NOT NULL
+                    account_info TEXT NOT NULL,
+                    uid_norm TEXT
                 )
             ''')
+            await conn.execute("ALTER TABLE stock ADD COLUMN IF NOT EXISTS uid_norm TEXT")
+            await conn.execute('''
+                UPDATE stock
+                SET uid_norm = LOWER(TRIM(SPLIT_PART(account_info, '|', 1)))
+                WHERE uid_norm IS NULL
+            ''')
+            await conn.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_uid_norm
+                ON stock (uid_norm)
+                WHERE uid_norm IS NOT NULL AND uid_norm <> ''
+            ''')
+
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS transactions (
                     sepay_id BIGINT PRIMARY KEY,
@@ -344,13 +357,25 @@ def get_category_info_by_filename(filename):
     elif "GMAIL" in fname:
         return ("cat_gmail", "CLONE NGÂM TRÂU - NAME VIỆT - ON2FA - AVT+BÌA - VER GMAIL ", 3500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU|MAIL")
     elif "NUOI" in fname:
-            return ("cat_nuoi", "CLONE VIỆT NUÔI NHIỀU BB - NAME+IP VIỆT - ON2FA - AVT+BÌA - VER GMAIL(random có add mail ảo lấy code) ", 10000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU|MAIL")
+        return ("cat_nuoi", "CLONE VIỆT NUÔI NHIỀU BB - NAME+IP VIỆT - ON2FA - AVT+BÌA - VER GMAIL(random có add mail ảo lấy code) ", 10000, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU|MAIL")
     elif "PHONE" in fname:
         return ("cat_phone", "CLONE NEW - NAME VIỆT - ON2FA - AVT - 3 POST - VER PHONE ", 2500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU")
     elif "DIEMAIL" in fname:
         return ("cat_die_mail", "CLONE NGÂM - NAME VIỆT - ON2FA - AVT ADD 20 -50 BB - VER HOTMAIL - MAIL DIE ", 3500, "UID | Pass | 2FA |COOKIE|TOKEN EAAAAU(MAIL DIE)")
     else:
         return ("cat_new_zin_ngam", "CLONE NGÂM TRÂU - NAME RANDOM - VER HOTMAIL - LIVE ALL 100%", 2000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
+
+def parse_account_line(raw_line: str):
+    clean_line = raw_line.strip()
+    if not clean_line:
+        return "empty", None, None
+
+    uid_part = clean_line.split("|", 1)[0].strip()
+    if not uid_part or " " in uid_part or len(uid_part) < 3:
+        return "error", None, clean_line
+
+    uid_norm = uid_part.lower()
+    return "ok", uid_norm, clean_line
 
 # ═══════════════════════════════════════════════════════════════════
 # FB PAGE CREATOR ENGINE
@@ -655,7 +680,6 @@ async def _page_creation_task_wrapper(msg_target, user_id, tokens, max_pages, st
     ok_count   = counter["ok"]
     fail_count = counter["fail"]
 
-    # ─── TÍNH FREE VS PAID ───
     free_used_before = await get_user_free_pages_used(user_id)
     free_remaining   = max(0, FREE_PAGES_FOR_NEW_USER - free_used_before)
 
@@ -716,7 +740,6 @@ async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     await get_user_balance(user_id)
 
-    # Banner free
     free_used = await get_user_free_pages_used(user_id)
     free_left = max(0, FREE_PAGES_FOR_NEW_USER - free_used)
 
@@ -829,8 +852,6 @@ async def profile_callback(call: CallbackQuery):
 async def deposit_callback(call: CallbackQuery):
     user_id = call.from_user.id
     syntax = f"NAP {user_id}"
-    
-    # Dùng API vietqr.app theo gợi ý của bạn, thêm tham số 'des' (description) để điền nội dung
     qr_url = f"https://vietqr.app/img?bank=MBBank&acc={BANK_ACCOUNT}&template=compact&des={urllib_quote(syntax)}&showinfo=true&holder={urllib_quote(ACCOUNT_NAME)}"
 
     caption = (
@@ -844,11 +865,9 @@ async def deposit_callback(call: CallbackQuery):
     )
 
     try:
-        # Gửi thẳng link ảnh cho Telegram (Telegram sẽ tự động tải và hiển thị ảnh)
         await call.message.answer_photo(photo=qr_url, caption=caption, parse_mode="Markdown")
     except Exception as e:
         logging.error(f"Lỗi gửi ảnh QR qua Telegram: {e}")
-        # Fallback nếu Telegram bó tay không tải được ảnh
         await call.message.answer(
             f"💰 **CHUYỂN KHOẢN THỦ CÔNG**\n\n"
             f"- Ngân hàng: **MB Bank**\n"
@@ -860,7 +879,6 @@ async def deposit_callback(call: CallbackQuery):
         )
 
     await call.answer()
-
 
 # ==================== MUA KEY TOOL ====================
 @dp.callback_query(lambda c: c.data == "buy_key_menu")
@@ -1521,7 +1539,6 @@ async def cmd_resetfree(message: types.Message):
         try:
             async with db_pool.acquire() as conn:
                 result = await conn.execute('UPDATE users SET free_pages_used = 0')
-            # result dạng "UPDATE N"
             count = result.split()[-1] if result else "?"
             await message.reply(
                 f"✅ **Đã reset quota free cho TẤT CẢ users!**\n"
@@ -1540,7 +1557,7 @@ async def cmd_resetfree(message: types.Message):
     target_user_id = int(target)
 
     try:
-        await get_user_balance(target_user_id)  # đảm bảo user tồn tại
+        await get_user_balance(target_user_id)
         await reset_user_free_pages(target_user_id)
 
         await message.reply(
@@ -1550,7 +1567,6 @@ async def cmd_resetfree(message: types.Message):
             parse_mode="Markdown"
         )
 
-        # Thông báo cho user
         try:
             await bot.send_message(
                 target_user_id,
@@ -1573,9 +1589,9 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     await state.clear()
 
     document = message.document
-    file_name = document.file_name
+    file_name = document.file_name or ""
 
-    if not file_name.endswith('.txt'):
+    if not file_name.lower().endswith('.txt'):
         await message.reply("⚠️ Vui lòng gửi file có định dạng `.txt`!", parse_mode="Markdown")
         return
 
@@ -1587,32 +1603,72 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     downloaded_file = await bot.download_file(file_path)
     file_content = downloaded_file.read().decode('utf-8', errors='ignore')
 
-    lines = file_content.split('\n')
+    lines = file_content.splitlines()
+
+    seen_in_file = set()
+    candidates = []
+    dup_count = 0
+    dup_in_file = 0
+    dup_in_db = 0
+    error_count = 0
+
+    for raw_line in lines:
+        status, uid_norm, clean_line = parse_account_line(raw_line)
+        if status == "empty":
+            continue
+        if status == "error":
+            error_count += 1
+            continue
+
+        if uid_norm in seen_in_file:
+            dup_in_file += 1
+            dup_count += 1
+            continue
+
+        seen_in_file.add(uid_norm)
+        candidates.append((uid_norm, clean_line))
+
     added_count = 0
 
     async with db_pool.acquire() as conn:
-        existing_cat = await conn.fetchrow('SELECT cat_name, price, format_desc FROM categories WHERE cat_code = $1', cat_code)
-
-        if not existing_cat:
-            await conn.execute(
-                'INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES ($1, $2, $3, $4)',
-                cat_code, default_cat_name, default_price, default_format_desc
+        async with conn.transaction():
+            existing_cat = await conn.fetchrow(
+                'SELECT cat_name, price, format_desc FROM categories WHERE cat_code = $1',
+                cat_code
             )
-            current_cat_name = default_cat_name
-        else:
-            current_cat_name = existing_cat['cat_name']
 
-        for line in lines:
-            line = line.strip()
-            if line:
-                await conn.execute('INSERT INTO stock (cat_code, account_info) VALUES ($1, $2)', cat_code, line)
-                added_count += 1
+            if not existing_cat:
+                await conn.execute(
+                    'INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES ($1, $2, $3, $4)',
+                    cat_code, default_cat_name, default_price, default_format_desc
+                )
+                current_cat_name = default_cat_name
+            else:
+                current_cat_name = existing_cat['cat_name']
+
+            for uid_norm, clean_line in candidates:
+                inserted_id = await conn.fetchval(
+                    '''
+                    INSERT INTO stock (cat_code, account_info, uid_norm)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (uid_norm) DO NOTHING
+                    RETURNING id
+                    ''',
+                    cat_code, clean_line, uid_norm
+                )
+                if inserted_id is not None:
+                    added_count += 1
+                else:
+                    dup_in_db += 1
+                    dup_count += 1
 
     await message.reply(
-        f"📥 **Đã nhập kho thành công!**\n"
-        f"- Tên file: `{file_name}`\n"
-        f"- Phân loại vào: **{current_cat_name[:30]}...**\n"
-        f"- Đã thêm: **{added_count}** tài khoản mới vào kho.",
+        f"📥 **Kết quả nhập kho:**\n"
+        f"• Tên file: `{file_name}`\n"
+        f"• Danh mục: **{current_cat_name[:35]}**\n"
+        f"• ✅ Thêm mới: **{added_count}**\n"
+        f"• ♻️ UID trùng: **{dup_count}** *(trong file: {dup_in_file} | đã có trên DB: {dup_in_db})*\n"
+        f"• ❌ Dòng lỗi: **{error_count}**",
         parse_mode="Markdown"
     )
 
