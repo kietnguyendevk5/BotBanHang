@@ -260,7 +260,6 @@ async def init_db():
                     cost BIGINT DEFAULT 0,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
-            ''')
 
             ''')
             await conn.execute("ALTER TABLE page_jobs ADD COLUMN IF NOT EXISTS delay_ok INT DEFAULT 300")
