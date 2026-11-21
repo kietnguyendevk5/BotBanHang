@@ -366,12 +366,18 @@ def get_category_info_by_filename(filename):
         return ("cat_new_zin_ngam", "CLONE NGÂM TRÂU - NAME RANDOM - VER HOTMAIL - LIVE ALL 100%", 2000, "UID | PASS | HOTMAIL| COOKIE|TOKEN EAAAAU")
 
 def parse_account_line(raw_line: str):
+    """
+    Trả về tuple (status, uid_norm, clean_line):
+    - status = "empty": dòng trống
+    - status = "error": dòng lỗi (UID rỗng hoặc độ dài < 2)
+    - status = "ok": dòng hợp lệ
+    """
     clean_line = raw_line.strip()
     if not clean_line:
         return "empty", None, None
 
     uid_part = clean_line.split("|", 1)[0].strip()
-    if not uid_part or " " in uid_part or len(uid_part) < 3:
+    if not uid_part or len(uid_part) < 2:
         return "error", None, clean_line
 
     uid_norm = uid_part.lower()
@@ -1591,17 +1597,15 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     document = message.document
     file_name = document.file_name or ""
 
-    if not file_name.lower().endswith('.txt'):
+    if not file_name.lower().endswith(".txt"):
         await message.reply("⚠️ Vui lòng gửi file có định dạng `.txt`!", parse_mode="Markdown")
         return
 
     cat_code, default_cat_name, default_price, default_format_desc = get_category_info_by_filename(file_name)
 
     file_info = await bot.get_file(document.file_id)
-    file_path = file_info.file_path
-
-    downloaded_file = await bot.download_file(file_path)
-    file_content = downloaded_file.read().decode('utf-8', errors='ignore')
+    downloaded_file = await bot.download_file(file_info.file_path)
+    file_content = downloaded_file.read().decode("utf-8", errors="ignore")
 
     lines = file_content.splitlines()
 
@@ -1611,6 +1615,7 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     dup_in_file = 0
     dup_in_db = 0
     error_count = 0
+    sample_errors = []
 
     for raw_line in lines:
         status, uid_norm, clean_line = parse_account_line(raw_line)
@@ -1618,6 +1623,8 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
             continue
         if status == "error":
             error_count += 1
+            if len(sample_errors) < 3 and clean_line:
+                sample_errors.append(clean_line[:50])
             continue
 
         if uid_norm in seen_in_file:
@@ -1633,27 +1640,26 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             existing_cat = await conn.fetchrow(
-                'SELECT cat_name, price, format_desc FROM categories WHERE cat_code = $1',
+                "SELECT cat_name FROM categories WHERE cat_code = $1",
                 cat_code
             )
-
             if not existing_cat:
                 await conn.execute(
-                    'INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES ($1, $2, $3, $4)',
+                    "INSERT INTO categories (cat_code, cat_name, price, format_desc) VALUES ($1, $2, $3, $4)",
                     cat_code, default_cat_name, default_price, default_format_desc
                 )
                 current_cat_name = default_cat_name
             else:
-                current_cat_name = existing_cat['cat_name']
+                current_cat_name = existing_cat["cat_name"]
 
             for uid_norm, clean_line in candidates:
                 inserted_id = await conn.fetchval(
-                    '''
+                    """
                     INSERT INTO stock (cat_code, account_info, uid_norm)
                     VALUES ($1, $2, $3)
                     ON CONFLICT (uid_norm) DO NOTHING
                     RETURNING id
-                    ''',
+                    """,
                     cat_code, clean_line, uid_norm
                 )
                 if inserted_id is not None:
@@ -1662,13 +1668,18 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
                     dup_in_db += 1
                     dup_count += 1
 
+    err_preview = ""
+    if sample_errors:
+        err_preview = "\n• Mẫu dòng lỗi: " + ", ".join(f"`{e}`" for e in sample_errors)
+
     await message.reply(
         f"📥 **Kết quả nhập kho:**\n"
         f"• Tên file: `{file_name}`\n"
         f"• Danh mục: **{current_cat_name[:35]}**\n"
+        f"• Tổng dòng đọc được: **{len(lines)}**\n"
         f"• ✅ Thêm mới: **{added_count}**\n"
         f"• ♻️ UID trùng: **{dup_count}** *(trong file: {dup_in_file} | đã có trên DB: {dup_in_db})*\n"
-        f"• ❌ Dòng lỗi: **{error_count}**",
+        f"• ❌ Dòng lỗi: **{error_count}**{err_preview}",
         parse_mode="Markdown"
     )
 
