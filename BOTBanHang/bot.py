@@ -165,6 +165,7 @@ async def init_db():
                     format_desc TEXT DEFAULT 'UID | Pass | 2FA'
                 )
             ''')
+            
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS stock (
                     id SERIAL PRIMARY KEY,
@@ -172,7 +173,7 @@ async def init_db():
                     account_info TEXT NOT NULL
                 )
             ''')
-            
+
             # Xóa UID trùng đã tồn tại, giữ lại bản ghi cũ nhất
             await conn.execute("""
                 WITH duplicate_rows AS (
@@ -194,7 +195,7 @@ async def init_db():
                     WHERE rn > 1
                 )
             """)
-            
+
             # Tạo UNIQUE INDEX chống UID trùng trên toàn bộ kho
             await conn.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_unique_uid
@@ -203,7 +204,7 @@ async def init_db():
                 )
                 WHERE BTRIM(SPLIT_PART(account_info, '|', 1)) <> ''
             """)
-            ''')
+
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS transactions (
                     sepay_id BIGINT PRIMARY KEY,
@@ -212,6 +213,7 @@ async def init_db():
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh')
                 )
             ''')
+
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS keys (
                     key_code TEXT PRIMARY KEY,
@@ -222,6 +224,7 @@ async def init_db():
                     expired_at TIMESTAMPTZ
                 )
             ''')
+
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS licenses (
                     license_key TEXT PRIMARY KEY,
@@ -236,6 +239,7 @@ async def init_db():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             ''')
+
             await conn.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS duration_days INT NOT NULL DEFAULT 0")
             await conn.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS owner_user_id BIGINT NULL")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_licenses_machine ON licenses(machine_id)")
@@ -256,6 +260,8 @@ async def init_db():
                     cost BIGINT DEFAULT 0,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
+            ''')
+
             ''')
             await conn.execute("ALTER TABLE page_jobs ADD COLUMN IF NOT EXISTS delay_ok INT DEFAULT 300")
             await conn.execute("ALTER TABLE page_jobs ADD COLUMN IF NOT EXISTS delay_fail INT DEFAULT 60")
