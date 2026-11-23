@@ -366,6 +366,8 @@ def get_category_info_by_filename(filename):
         return ("cat_bm", "Clone New đã qua BM", 2500, "Hàng login qua cookies, ae log id pass tets trước khi dùng")
     elif "NEWZIN" in fname:
         return ("cat_new_zin", "Clone 6159 - ON2FA -  NAME NGOẠI IP VIỆT - NEW ZIN ALL(Nên mua ít test kỹ trước khi mua SLL)", 1500, "UID | Pass | 2FA | Cookie | Token |MAIL ẢO")
+    elif "PAGE_5" in fname or "KEPPAGE_5_ON2FA" in fname:
+        return ("cat_acc_kep_page_5_on2fa", "CLONE KẸP 5 PAGE NAME VIỆT  - ON2FA - AVT-BÌA ver sms or mail ảo", 5000, "UID | Pass | 2FA | Cookie | Token |MAIL|PASSMAIL(Nếu có)")    
     elif "PAGE_15_NO2FA" in fname or "KEPPAGE_15_NO2FA" in fname:
         return ("cat_acc_kep_page_15_no2fa", "CLONE KẸP 15 PAGE NAME VIỆT  - NO 2FA - AVT-BÌA ver sms or mail ảo", 13000, "UID | Pass | Cookie | Token |MAIL|PASSMAIL(Nếu có)")    
     elif "PAGE_10_NO2FA" in fname or "KEPPAGE_10_NO2FA" in fname:
