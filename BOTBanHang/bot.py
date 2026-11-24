@@ -54,7 +54,7 @@ DELAY_FAIL_MIN = 10
 DELAY_FAIL_MAX = 600
 
 # ─── Ưu đãi user mới ───
-FREE_PAGES_FOR_NEW_USER = 10   # 10 page OK đầu tiên miễn phí
+FREE_PAGES_FOR_NEW_USER = 10
 
 # Headers check live
 CHECK_HEADERS = {
@@ -174,7 +174,6 @@ async def init_db():
                 )
             ''')
 
-            # Xóa UID trùng đã tồn tại, giữ lại bản ghi cũ nhất
             await conn.execute("""
                 WITH duplicate_rows AS (
                     SELECT
@@ -196,7 +195,6 @@ async def init_db():
                 )
             """)
 
-            # Tạo UNIQUE INDEX chống UID trùng trên toàn bộ kho
             await conn.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_unique_uid
                 ON stock (
@@ -443,10 +441,75 @@ def _rand_page_name(style='vn'):
     ten = random.choice(_PAGE_TEN)
     return f"{ho} {dem} {ten}" if dem else f"{ho} {ten}"
 
-def _check_token_live(token):
+# ═══════════════════════════════════════════════════════════════════
+# ✅ PARSE DÒNG TOKEN + PROXY  (UID|TOKEN|PROXY)
+# ═══════════════════════════════════════════════════════════════════
+def _parse_token_line(line):
+    """Parse 1 dòng: UID|TOKEN|PROXY  hoặc  TOKEN  hoặc  TOKEN|PROXY
+    Trả về (uid, token, proxy_raw)"""
+    parts = [p.strip() for p in line.split("|")]
+    uid = None
+    token = None
+    proxy = None
+
+    # 1) Ưu tiên tìm chuỗi token FB (bắt đầu bằng EAA)
+    for p in parts:
+        if p.startswith("EAA") and len(p) > 50:
+            token = p
+            break
+
+    # 2) Xác định UID và PROXY theo vị trí
+    if len(parts) >= 3:
+        if parts[0].isdigit():
+            uid = parts[0]
+        if token:
+            if parts[2] and parts[2] != token:
+                proxy = parts[2]
+            elif parts[1] and parts[1] != token:
+                proxy = parts[1]
+    elif len(parts) == 2:
+        if parts[0].isdigit():
+            uid = parts[0]
+            token = token or parts[1]
+        else:
+            token = token or parts[0]
+            proxy = parts[1]
+    elif len(parts) == 1:
+        token = token or parts[0]
+
+    return uid, token, proxy
+
+
+def _proxy_to_url(proxy):
+    """Chuẩn hoá proxy raw → URL cho requests
+    - IP:PORT
+    - IP:PORT:USER:PASS
+    - http://... hoặc socks5://...
+    """
+    if not proxy:
+        return None
+    proxy = proxy.strip()
+    if proxy.startswith(("http://", "https://", "socks")):
+        return proxy
+
+    parts = proxy.split(":")
+    if len(parts) == 2:                     # IP:PORT
+        return f"http://{parts[0]}:{parts[1]}"
+    if len(parts) == 4:                     # IP:PORT:USER:PASS
+        ip, port, user, pw = parts
+        return f"http://{user}:{pw}@{ip}:{port}"
+    if len(parts) == 3:                     # USER:PASS@IP:PORT hoặc IP:PORT:USER
+        return f"http://{parts[0]}:{parts[1]}"
+    return proxy
+
+
+def _check_token_live(token, proxy=None):
+    """Check token live — có thể đi qua proxy"""
     try:
+        proxies = {"http": proxy, "https": proxy} if proxy else None
         r = requests.get(
             f"https://graph.facebook.com/me?fields=id,name&access_token={token}",
+            proxies=proxies,
             timeout=15,
         )
         j = r.json()
@@ -601,18 +664,35 @@ async def _run_page_creation_job(bot_inst, chat_id, tokens, max_per_token, name_
     total_planned = len(tokens) * max_per_token
     loop = asyncio.get_running_loop()
 
-    def _worker(token):
-        uid, uname = _check_token_live(token)
-        if not uid:
+    def _worker(line):
+        # Parse dòng: UID|TOKEN|PROXY
+        uid_file, token, proxy_raw = _parse_token_line(line)
+        proxy_url = _proxy_to_url(proxy_raw)
+
+        if not token:
             with lock:
-                results.append({"token": token, "uid": "-", "ok": False, "err": "token_die"})
+                results.append({"token": line[:60], "uid": "-", "ok": False, "err": "invalid_token_line"})
                 counter["done"] += 1
                 counter["fail"] += 1
+            logging.warning(f"[Parse] Dòng không có token hợp lệ: {line[:80]}")
+            return
+
+        logging.info(f"[Parse] UID={uid_file} | token={token[:20]}... | proxy={proxy_url}")
+
+        # Check token live (qua proxy nếu có)
+        uid, uname = _check_token_live(token, proxy_url)
+        if not uid:
+            uid = uid_file or "-"
+            with lock:
+                results.append({"token": token, "uid": uid, "ok": False, "err": "token_die"})
+                counter["done"] += 1
+                counter["fail"] += 1
+            logging.warning(f"[Token {uid}] Token die hoặc proxy không kết nối được.")
             return
 
         for p in range(1, max_per_token + 1):
             page_name = _rand_page_name(name_style)
-            r = _create_page_sync(token, page_name)   # ← đã bỏ fingerprint
+            r = _create_page_sync(token, page_name, proxy=proxy_url)
 
             with lock:
                 if r.get("success"):
@@ -636,14 +716,14 @@ async def _run_page_creation_job(bot_inst, chat_id, tokens, max_per_token, name_
                 else:
                     delay = delay_fail
                     tag = "thất bại"
-                logging.info(f"[Token {uid}] Page #{p} {tag} → nghỉ {delay}s")
+                logging.info(f"[Token {uid}] Page #{p} {tag} → nghỉ {delay}s  (err={r.get('error','-')})")
                 time.sleep(delay)
 
     sem = asyncio.Semaphore(PAGE_CREATE_THREADS)
 
-    async def _wrap(token):
+    async def _wrap(line):
         async with sem:
-            await loop.run_in_executor(None, _worker, token)
+            await loop.run_in_executor(None, _worker, line)
 
     tasks = [asyncio.create_task(_wrap(tk)) for tk in tokens]
 
@@ -693,7 +773,6 @@ async def _page_creation_task_wrapper(msg_target, user_id, tokens, max_pages, st
     ok_count   = counter["ok"]
     fail_count = counter["fail"]
 
-    # ─── TÍNH FREE VS PAID ───
     free_used_before = await get_user_free_pages_used(user_id)
     free_remaining   = max(0, FREE_PAGES_FOR_NEW_USER - free_used_before)
 
@@ -754,7 +833,6 @@ async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     await get_user_balance(user_id)
 
-    # Banner free
     free_used = await get_user_free_pages_used(user_id)
     free_left = max(0, FREE_PAGES_FOR_NEW_USER - free_used)
 
@@ -1191,13 +1269,16 @@ async def page_create_menu(call: CallbackQuery, state: FSMContext):
         f"🎁 Page lỗi: **miễn phí**\n"
         f"💳 Số dư của bạn: `{balance:,} VNĐ`\n\n"
         f"📋 **Hướng dẫn:**\n"
-        f"1️⃣ Chuẩn bị file `.txt` chứa danh sách token (mỗi dòng 1 token)\n"
+        f"1️⃣ Chuẩn bị file `.txt`, mỗi dòng theo định dạng:\n"
+        f"   `UID|TOKEN|PROXY`\n"
+        f"   hoặc `TOKEN|PROXY`\n"
+        f"   hoặc chỉ `TOKEN`\n"
         f"2️⃣ Bấm nút bên dưới và gửi file\n"
         f"3️⃣ Nhập số page tối đa / token (1–{PAGE_CREATE_MAX_PER_TOKEN})\n"
         f"4️⃣ Chọn kiểu tên (VN / US)\n"
         f"5️⃣ Cấu hình thời gian nghỉ\n"
         f"6️⃣ Xác nhận — bot tự chạy\n\n"
-        f"6️⃣ Lưu ý cần proxy để chạy IP trên bot dùng IP host nên k reg đc\n"
+        f"⚠️ *Nên có proxy đi kèm từng token để tránh bị Facebook rate-limit.*\n"
         f"⚠️ *Chỉ tính tiền cho page TẠO THÀNH CÔNG (đã trừ quota free).*"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1211,8 +1292,14 @@ async def page_create_menu(call: CallbackQuery, state: FSMContext):
 async def page_upload_start(call: CallbackQuery, state: FSMContext):
     await state.set_state(PageCreateState.waiting_for_tokens)
     await call.message.edit_text(
-        "📤 **Hãy gửi file `.txt` chứa danh sách token** (mỗi dòng 1 token).\n\n"
-        "VD:\n```\nEAAAAU...\nEAAAAU...\n```",
+        "📤 **Hãy gửi file `.txt` chứa danh sách token** (mỗi dòng 1 dòng).\n\n"
+        "**Định dạng hỗ trợ:**\n"
+        "```\n"
+        "UID|TOKEN|IP:PORT:USER:PASS\n"
+        "UID|TOKEN\n"
+        "TOKEN|IP:PORT:USER:PASS\n"
+        "TOKEN\n"
+        "```",
         parse_mode="Markdown",
     )
     await call.answer()
@@ -1243,7 +1330,7 @@ async def page_receive_tokens(message: types.Message, state: FSMContext):
     await state.update_data(tokens=tokens)
     await state.set_state(PageCreateState.waiting_for_max_pages)
     await message.reply(
-        f"✅ Đã nhận **{len(tokens)}** token.\n\n"
+        f"✅ Đã nhận **{len(tokens)}** dòng.\n\n"
         f"❓ **Nhập số page tối đa cho mỗi token** (1–{PAGE_CREATE_MAX_PER_TOKEN}):",
         parse_mode="Markdown",
     )
@@ -1413,7 +1500,7 @@ async def _render_confirm(msg_target, state: FSMContext, data: dict, is_callback
 
     text = (
         f"📋 **XÁC NHẬN TẠO PAGE**\n\n"
-        f"• Số token: `{len(tokens)}`\n"
+        f"• Số dòng: `{len(tokens)}`\n"
         f"• Page tối đa / token: `{max_pages}`\n"
         f"• Tổng page tối đa: `{max_total}`\n"
         f"• Kiểu tên: **{label}**\n"
@@ -1483,7 +1570,7 @@ async def page_confirm_cb(call: CallbackQuery, state: FSMContext):
 
     await call.message.edit_text(
         f"⚙️ **Đang khởi động job tạo page...**\n"
-        f"• Tokens: `{len(tokens)}`\n"
+        f"• Số dòng: `{len(tokens)}`\n"
         f"• Max/token: `{max_pages}`\n"
         f"• Kiểu tên: **{'VN' if style == 'vn' else 'US'}**\n"
         f"• Nghỉ OK/Fail: `{delay_ok}s / {delay_fail}s`\n"
@@ -1502,7 +1589,7 @@ async def page_confirm_cb(call: CallbackQuery, state: FSMContext):
             ADMIN_ID,
             f"🚀 **Có job tạo page mới**\n"
             f"• User: `{user_id}`\n"
-            f"• Tokens: `{len(tokens)}`\n"
+            f"• Số dòng: `{len(tokens)}`\n"
             f"• Max/token: `{max_pages}`\n"
             f"• Style: **{'VN' if style == 'vn' else 'US'}**\n"
             f"• Delay OK/Fail: `{delay_ok}s / {delay_fail}s`\n"
@@ -1529,7 +1616,7 @@ async def cmd_createpage_admin(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
     await state.set_state(PageCreateState.waiting_for_tokens)
-    await message.reply("👑 **Admin mode** — gửi file tokens.txt.")
+    await message.reply("👑 **Admin mode** — gửi file tokens.txt (mỗi dòng `UID|TOKEN|PROXY`).")
 
 # ═══════════════════════════════════════════════════════════════════
 # ADMIN: /resetfree
