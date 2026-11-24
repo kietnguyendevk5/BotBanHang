@@ -394,25 +394,6 @@ def get_category_info_by_filename(filename):
 # ═══════════════════════════════════════════════════════════════════
 # FB PAGE CREATOR ENGINE
 # ═══════════════════════════════════════════════════════════════════
-_PAGE_DEVICES = [
-    ("samsung", "SM-X910N",  1080, 1920, 3.0,   "13", "33", "MobiFone",    "45201"),
-    ("samsung", "SM-S918B",  1080, 2340, 3.0,   "14", "34", "Viettel",     "45204"),
-    ("samsung", "SM-A546E",  1080, 2340, 2.75,  "13", "33", "Vinaphone",   "45202"),
-    ("Xiaomi",  "2201123G",  1080, 2400, 2.75,  "13", "33", "Viettel",     "45204"),
-    ("Xiaomi",  "M2101K7AG", 1080, 2400, 2.75,  "12", "31", "MobiFone",    "45201"),
-    ("OPPO",    "CPH2451",   1080, 2412, 3.0,   "14", "34", "Vinaphone",   "45202"),
-    ("vivo",    "V2141",     1080, 2400, 2.75,  "13", "33", "Vietnamobile","45205"),
-    ("Google",  "Pixel 7",   1080, 2400, 2.625, "14", "34", "Viettel",     "45204"),
-    ("Google",  "Pixel 6a",  1080, 2400, 2.625, "13", "33", "MobiFone",    "45201"),
-    ("realme",  "RMX3630",   1080, 2412, 3.0,   "13", "33", "Gmobile",     "45207"),
-]
-_PAGE_FB_VERSIONS = [
-    ("450.0.0.42.110", "563890684"),
-    ("452.0.0.38.111", "570211455"),
-    ("448.0.0.33.120", "559012734"),
-    ("455.0.0.25.100", "581234001"),
-]
-_PAGE_CONN_TYPES = ["WIFI", "WIFI", "WIFI", "MOBILE"]
 
 _PAGE_HO  = ["Nguyễn", "Trần", "Lê", "Phạm", "Hoàng", "Huỳnh", "Phan",
              "Vũ", "Võ", "Đặng", "Bùi", "Đỗ", "Hồ", "Ngô", "Dương",
@@ -449,27 +430,6 @@ _PAGE_US_LAST = [
     "Green", "Adams", "Nelson", "Baker", "Hall", "Rivera", "Campbell",
 ]
 
-def _gen_page_fp():
-    brand, model, w, h, d, av, sdk, carrier, hni = random.choice(_PAGE_DEVICES)
-    fb_ver, fb_bv = random.choice(_PAGE_FB_VERSIONS)
-    conn = random.choice(_PAGE_CONN_TYPES)
-    conn_token = _uuid.uuid4().hex
-    return {
-        "ua": (f"[FBAN/FB4A;FBAV/{fb_ver};FBBV/{fb_bv};"
-               f"FBDM/{{density={d},width={w},height={h}}};FBLC/vi_VN;FBRV/0;"
-               f"FBCR/{carrier};FBMF/{brand.lower()};FBBD/{brand.lower()};"
-               f"FBPN/com.facebook.katana;FBDV/{model};FBSV/{av};FBOP/1;"
-               f"FBCA/x86_64:arm64-v8a;]"),
-        "conn_type": conn,
-        "conn_token": conn_token,
-        "session_id": f"nid={_uuid.uuid4().hex[:8]};tid=301;nc=0;fc=0;bc=0;cid={conn_token}",
-        "device_group": str(random.randint(1000, 9999)),
-        "hni": hni,
-        "privacy": str(random.randint(10**15, 10**16 - 1)),
-        "trace": str(_uuid.uuid4()),
-        "brand": brand, "model": model, "carrier": carrier,
-    }
-
 def _rand_page_name(style='vn'):
     if style == 'us':
         first = random.choice(_PAGE_US_FIRST)
@@ -496,90 +456,121 @@ def _check_token_live(token):
         pass
     return None, None
 
-def _create_page_sync(access_token, page_name, fingerprint):
-    url = "https://graph-fallback.facebook.com/graphql"
-    BLOKS   = "f5aecaf4351fddd477cdd2e6caa0dd80aa1ac9dd7027df540897caabc146affd"
-    APP     = "com.bloks.www.additional.profile.plus.creation.action.category.submit"
-    STYLES  = "8e57d61b340c672f5a82cd4d3d821e24"
-    FRIENDLY= "FbBloksActionRootQuery-" + APP
+# ═══════════════════════════════════════════════════════════════════
+# ✅ BƯỚC 1: TẠO PAGE (ĐÃ ĐỒNG BỘ VỚI regpage.py)
+# ═══════════════════════════════════════════════════════════════════
+def _create_page_sync(access_token, page_name, proxy=None):
+    """Bước 1: Tạo Page — API mới nhất (đồng bộ regpage.py)"""
+    bloks_version_id = "15a5f1a86f9c3249417cdc9764cb5d6fa314507742fa5ecf74d44c6f3d068270"
+    now_ms = int(time.time() * 1000)
 
-    inner = {
+    nav_chain = (
+        "com.bloks.www.additional.profile.plus.creation,com.bloks.www.additional.profile.plus.creation,,1795319050.207,21039344,,,,1795319050.207;"
+        "com.bloks.www.additional.profile.plus.creation,com.bloks.www.additional.profile.plus.creation,,1795319040.785,103427340,,,,1795319040.785;"
+        "com.bloks.www.unified.profile.creation,com.bloks.www.unified.profile.creation,,1795319038.871,196289620,,,,1795319038.871;"
+        "FbScreenFragment,new_launchpoint,tap_bookmark,1795319034.605,226283272,250100865708545,,,1795319034.605;"
+        "BookmarkComponentsFragment,bookmarks,sliding_panel_tap_button,1795319022.475,44605351,,,,1795319022.475"
+    )
+
+    inner_params = {
         "client_input_params": {
             "entrypoint_logging_data": {
                 "fb_profile_editing_session_entry_point": None,
-                "field_edit_screen_entry_point": None,
+                "field_edit_screen_entry_point": None
             },
             "profile_plus_id": "0",
             "cp_upsell_declined": 0,
             "off_platform_creator_reachout_id": "",
             "session_id": None,
-            "category_ids": ["2347428775505624"],
-            "nav_chain": "com.bloks.www.additional.profile.plus.creation,com.bloks.www.additional.profile.plus.creation,,1791748816.167,19071341,,,;",
+            "category_ids": ["2700"],
+            "nav_chain": nav_chain
         },
         "server_params": {
-            "referrer": "bottom_sheet_switcher",
+            "referrer": "pages_tab_launch_point_unified_creation",
             "INTERNAL__latency_qpl_marker_id": 36707139,
             "creation_source": "android",
             "name": page_name,
             "variant": 8,
             "screen": "category",
-            "INTERNAL__latency_qpl_instance_id": 54323465500063,
-        },
+            "INTERNAL__latency_qpl_instance_id": now_ms % 100000000000000
+        }
     }
+
+    # ⚠️ Double-wrap JSON — bắt buộc theo API mới
+    nested = json.dumps(inner_params, separators=(',', ':'))
+    final_params = json.dumps({"params": nested}, separators=(',', ':'))
+
     variables = {
-        "params": {
-            "params": json.dumps(inner, ensure_ascii=False, separators=(",", ":")),
-            "bloks_versioning_id": BLOKS,
-            "app_id": APP,
-        },
-        "scale": "3",
         "nt_context": {
-            "using_white_navbar": True, "pixel_ratio": 3, "is_push_on": True,
-            "styles_id": STYLES, "bloks_version": BLOKS,
+            "android_os_api_level": 28,
+            "bloks_version": bloks_version_id,
+            "theme_params": [
+                {"design_system_name": "XMDS", "value": ["three_neutral_gray"], "user_selected_theme": None},
+                {"design_system_name": "FDS",  "value": ["BUTTON_LARGE_44X12_TEST"], "user_selected_theme": None}
+            ],
+            "gpu_memory_mb": 6029,
+            "debug_tooling_metadata_token": None,
+            "android_device_performance_class": None,
+            "is_flipper_enabled": False,
+            "is_push_on": True,
+            "pixel_ratio": 3,
+            "styles_id": "30687e5956e05810d57fde464bb0a32c",
+            "using_white_navbar": True
         },
+        "use_native_entrypoint_for_stars_on_reels": True,
+        "scale": "3",
+        "params": {
+            "app_id": "com.bloks.www.additional.profile.plus.creation.action.category.submit",
+            "bloks_versioning_id": bloks_version_id,
+            "params": final_params
+        }
     }
-    data = {
-        "method": "post", "pretty": "false", "format": "json",
-        "server_timestamps": "true", "locale": "vi_VN", "purpose": "fetch",
-        "fb_api_req_friendly_name": FRIENDLY,
+
+    payload = {
+        "method": "post",
+        "format": "json",
+        "server_timestamps": "true",
+        "locale": "vi_VN",
+        "purpose": "fetch",
+        "fb_api_req_friendly_name": "FbBloksActionRootQuery-com.bloks.www.additional.profile.plus.creation.action.category.submit",
         "fb_api_caller_class": "graphservice",
-        "client_doc_id": "1199408042437361526250104613",
-        "variables": json.dumps(variables, ensure_ascii=False, separators=(",", ":")),
-        "fb_api_analytics_tags": '["GraphServices"]',
-        "client_trace_id": fingerprint["trace"],
+        "client_doc_id": "119940804217817482395184418464",
+        "fb_api_client_context": '{"is_background":false}',
+        "variables": json.dumps(variables, separators=(',', ':'))
     }
+
     headers = {
         "Authorization": f"OAuth {access_token}",
-        "User-Agent": fingerprint["ua"],
-        "X-FB-Friendly-Name": FRIENDLY,
-        "X-FB-HTTP-Engine": "Liger",
-        "X-FB-Connection-Type": fingerprint["conn_type"],
-        "x-fb-connection-token": fingerprint["conn_token"],
-        "x-fb-session-id": fingerprint["session_id"],
-        "x-fb-device-group": fingerprint["device_group"],
-        "x-fb-client-ip": "True",
-        "x-fb-sim-hni": fingerprint["hni"],
-        "x-fb-net-hni": fingerprint["hni"],
-        "x-fb-privacy-context": fingerprint["privacy"],
-        "x-fb-ta-logging-ids": f"graphql:{fingerprint['trace']}",
-        "x-graphql-client-library": "graphservice",
-        "x-graphql-request-purpose": "fetch",
-        "x-tigon-is-retry": "False",
         "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "[FBAN/FB4A;FBAV/587.0.0.39.55;FBBV/1111371241;FBDM/{density=3.0,width=1080,height=1920};FBLC/vi_VN;FBRV/0;FBCR/MobiFone;FBMF/samsung;FBBD/samsung;FBPN/com.facebook.katana;FBDV/SM-X910N;FBSV/9;FBOP/1;FBCA/x86_64:arm64-v8a;]",
+        "X-FB-Friendly-Name": "FbBloksActionRootQuery-com.bloks.www.additional.profile.plus.creation.action.category.submit",
+        "X-FB-HTTP-Engine": "Tigon/Liger",
+        "x-graphql-client-library": "pando",
+        "x-graphql-request-purpose": "fetch",
+        "x-fb-client-ip": "True",
+        "x-fb-server-cluster": "True"
     }
+
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+
     try:
-        response = requests.post(url, headers=headers, data=data, timeout=12)
+        r = requests.post(
+            "https://graph-fallback.facebook.com/graphql",
+            data=payload, headers=headers,
+            proxies=proxies, timeout=30
+        )
     except Exception as e:
         return {"success": False, "error": str(e)[:120]}
 
     try:
-        js = response.json()
+        js = r.json()
     except Exception:
-        return {"success": False, "error": "invalid_json"}
+        return {"success": False, "error": f"invalid_json (HTTP {r.status_code}): {r.text[:100]}"}
 
     if "errors" in js:
         return {"success": False, "error": str(js["errors"][0].get("message", "unknown"))[:120]}
 
+    # Bóc page_id — 2 lớp dự phòng
     page_id = None
     try:
         bundle = js["data"]["fb_bloks_action"]["root_action"]["action"]["action_bundle"]["bloks_bundle_action"]
@@ -588,6 +579,15 @@ def _create_page_sync(access_token, page_name, fingerprint):
             page_id = m.group(1)
     except (KeyError, TypeError):
         pass
+
+    if not page_id:
+        try:
+            raw = json.dumps(js)
+            matches = re.findall(r'"(615[0-9]{12,})"', raw)
+            if matches:
+                page_id = matches[0]
+        except Exception:
+            pass
 
     if page_id:
         return {"success": True, "page_id": page_id, "page_name": page_name}
@@ -612,8 +612,7 @@ async def _run_page_creation_job(bot_inst, chat_id, tokens, max_per_token, name_
 
         for p in range(1, max_per_token + 1):
             page_name = _rand_page_name(name_style)
-            fp        = _gen_page_fp()
-            r         = _create_page_sync(token, page_name, fp)
+            r = _create_page_sync(token, page_name)   # ← đã bỏ fingerprint
 
             with lock:
                 if r.get("success"):
@@ -869,7 +868,6 @@ async def deposit_callback(call: CallbackQuery):
     user_id = call.from_user.id
     syntax = f"NAP {user_id}"
     
-    # Dùng API vietqr.app theo gợi ý của bạn, thêm tham số 'des' (description) để điền nội dung
     qr_url = f"https://vietqr.app/img?bank=MBBank&acc={BANK_ACCOUNT}&template=compact&des={urllib_quote(syntax)}&showinfo=true&holder={urllib_quote(ACCOUNT_NAME)}"
 
     caption = (
@@ -883,11 +881,9 @@ async def deposit_callback(call: CallbackQuery):
     )
 
     try:
-        # Gửi thẳng link ảnh cho Telegram (Telegram sẽ tự động tải và hiển thị ảnh)
         await call.message.answer_photo(photo=qr_url, caption=caption, parse_mode="Markdown")
     except Exception as e:
         logging.error(f"Lỗi gửi ảnh QR qua Telegram: {e}")
-        # Fallback nếu Telegram bó tay không tải được ảnh
         await call.message.answer(
             f"💰 **CHUYỂN KHOẢN THỦ CÔNG**\n\n"
             f"- Ngân hàng: **MB Bank**\n"
@@ -1561,7 +1557,6 @@ async def cmd_resetfree(message: types.Message):
         try:
             async with db_pool.acquire() as conn:
                 result = await conn.execute('UPDATE users SET free_pages_used = 0')
-            # result dạng "UPDATE N"
             count = result.split()[-1] if result else "?"
             await message.reply(
                 f"✅ **Đã reset quota free cho TẤT CẢ users!**\n"
@@ -1580,7 +1575,7 @@ async def cmd_resetfree(message: types.Message):
     target_user_id = int(target)
 
     try:
-        await get_user_balance(target_user_id)  # đảm bảo user tồn tại
+        await get_user_balance(target_user_id)
         await reset_user_free_pages(target_user_id)
 
         await message.reply(
@@ -1590,7 +1585,6 @@ async def cmd_resetfree(message: types.Message):
             parse_mode="Markdown"
         )
 
-        # Thông báo cho user
         try:
             await bot.send_message(
                 target_user_id,
@@ -1687,14 +1681,12 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
 
                 for line in lines:
 
-                    # Lấy UID ở phần đầu tiên trước dấu |
                     uid = line.split('|', 1)[0].strip()
 
                     if not uid:
                         invalid_count += 1
                         continue
 
-                    # Chuẩn hóa UID để kiểm tra trùng trong file
                     uid_normalized = uid.casefold()
 
                     if uid_normalized in seen_uids:
@@ -1703,7 +1695,6 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
 
                     seen_uids.add(uid_normalized)
 
-                    # PostgreSQL tự kiểm tra UID trùng toàn bộ kho
                     inserted = await conn.fetchval(
                         '''
                         INSERT INTO stock (cat_code, account_info)
