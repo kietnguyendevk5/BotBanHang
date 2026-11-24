@@ -1201,6 +1201,7 @@ async def page_create_menu(call: CallbackQuery, state: FSMContext):
         f"4️⃣ Chọn kiểu tên (VN / US)\n"
         f"5️⃣ Cấu hình thời gian nghỉ\n"
         f"6️⃣ Xác nhận — bot tự chạy\n\n"
+        f"6️⃣ Lưu ý cần proxy để chạy IP trên bot dùng IP host nên k reg đc\n"
         f"⚠️ *Chỉ tính tiền cho page TẠO THÀNH CÔNG (đã trừ quota free).*"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
